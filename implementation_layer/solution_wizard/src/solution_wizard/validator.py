@@ -16,6 +16,7 @@ from .blueprint import (
     external_services,
     sends_nothing,
 )
+from .bpmn_generator import DERIVED_PARTICIPANT_IDS
 from .registry import Registry, get_registry
 
 # Components whose job is to check an extracted result against its source (Rule 14).
@@ -377,7 +378,13 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
     # another component, and a *separate* step also uses that inner component,
     # recommend enabling it via an option on the parent instead. The canonical
     # case: Transcriber(enhanced_transcript=True) on audio input makes a
-    # separate TranscriptEnhancer step redundant.
+    # separate TranscriptEnhancer step redundant. A blueprint that allows no
+    # external model API gets no hint to enable enhancement on any parent
+    # (Transcriber, AudioToStructuredData): enhancement sends the transcript to a
+    # cloud chat model, so the PoC keeps it off there.
+    from .scaffolder import external_model_forbidden
+
+    no_external_model = external_model_forbidden(blueprint)
     step_by_component = {}
     for s in steps:
         if s.component:
@@ -394,11 +401,17 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
         for inner in provided:
             other = step_by_component.get(inner)
             if other is not None and other.id != s.id:
-                hint = (
-                    "set Transcriber(enhanced_transcript=True) on the audio step instead"
-                    if s.component == "Transcriber" and inner == "TranscriptEnhancer"
-                    else f"enable it via an option/parameter on '{s.component}' instead of a separate step"
-                )
+                if inner == "TranscriptEnhancer" and no_external_model:
+                    # Transcriber, AudioToStructuredData or any other parent: the PoC
+                    # keeps their enhancement off, so there is nothing to enable.
+                    hint = (
+                        "remove the step: the blueprint allows no external model API, so "
+                        "transcript enhancement stays off"
+                    )
+                elif s.component == "Transcriber" and inner == "TranscriptEnhancer":
+                    hint = "set Transcriber(enhanced_transcript=True) on the audio step instead"
+                else:
+                    hint = f"enable it via an option/parameter on '{s.component}' instead of a separate step"
                 warnings.append(
                     Issue(
                         12,
@@ -416,16 +429,21 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
     # since the PoC then uses the default.
     from .scaffolder import (
         DEFAULT_PROVIDER,
+        _declared_local_hosts,
         defaulted_stages,
-        external_model_forbidden,
         governance_problems,
     )
 
     if steps:
         for problem in governance_problems(blueprint):
             errors.append(Issue(13, problem))
+        if not no_external_model:
+            # The PoC sends keys to a models.local_endpoints host over http whatever
+            # the flags say, and the scaffolder refuses a bad entry either way.
+            for problem in _declared_local_hosts(blueprint)[1]:
+                errors.append(Issue(13, problem))
         try:
-            defaulted = [] if external_model_forbidden(blueprint) else defaulted_stages(blueprint)
+            defaulted = [] if no_external_model else defaulted_stages(blueprint)
         except ValueError:
             defaulted = []
         if defaulted:
@@ -439,7 +457,7 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
             )
     # Any answer but "no" or "unknown" counts as personal data, as in the BPMN annotations.
     personal = str(blueprint.governance.data_handling.contains_personal_data).strip().lower()
-    if steps and personal not in {"no", "unknown", ""} and not external_model_forbidden(blueprint):
+    if steps and personal not in {"no", "unknown", ""} and not no_external_model:
         warnings.append(
             Issue(
                 13,
@@ -496,6 +514,39 @@ def validate(blueprint: Blueprint, registry: Optional[Registry] = None) -> Valid
     # has already refused a package or a variable name that is not plain; this
     # rule checks what the user and the governance flags said about each one.
     _check_external_services(blueprint, errors, warnings)
+
+    # ------------------------------------------------------------------
+    # Rule 16: a step's performed_by names a business_process participant, so
+    # the step's lane in the BPMN is the one the blueprint says. With no
+    # participants the generator derives the lanes; their ids are accepted then.
+    participants = blueprint.business_process.participants
+    if participants:
+        participant_ids = {p.id for p in participants}
+        for step in steps:
+            if step.performed_by and step.performed_by not in participant_ids:
+                errors.append(
+                    Issue(
+                        16,
+                        f"Step '{step.id}' has performed_by '{step.performed_by}', which is "
+                        "not a participant id in business_process.participants "
+                        f"({', '.join(sorted(participant_ids))}). Use one of them, add the "
+                        "participant, or leave performed_by empty.",
+                        step_id=step.id,
+                    )
+                )
+    else:
+        for step in steps:
+            if step.performed_by and step.performed_by not in DERIVED_PARTICIPANT_IDS:
+                errors.append(
+                    Issue(
+                        16,
+                        f"Step '{step.id}' has performed_by '{step.performed_by}', but "
+                        "business_process.participants is empty. Add the participant, use a "
+                        "derived lane id (system, reviewers, users), or leave performed_by "
+                        "empty.",
+                        step_id=step.id,
+                    )
+                )
 
     ok = len(errors) == 0
     return ValidationResult(ok=ok, errors=errors, warnings=warnings)

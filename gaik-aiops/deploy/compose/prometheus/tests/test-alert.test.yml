@@ -1,0 +1,58 @@
+# Run: promtool test rules prometheus/tests/test-alert.test.yml
+rule_files:
+  - ../rules/test-alert.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: without the test gauge nothing fires
+    interval: 1m
+    input_series:
+      - series: 'wizard_up{service_name="wizard-v2-api", deployment_environment_name="s4"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AIOpsTestAlert
+        exp_alerts: []
+
+  - name: sending 1 fires at once, sending 0 clears it
+    interval: 1m
+    input_series:
+      # Sent at minute 2 (fire), then at minute 6 (clear).
+      - series: 'gaik_aiops_test_alert{service_name="aiops-test-alert", deployment_environment_name="local"}'
+        values: '_ _ 1 _ _ _ 0'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: AIOpsTestAlert
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: AIOpsTestAlert
+        exp_alerts:
+          - exp_labels: {service_name: aiops-test-alert, deployment_environment_name: local, severity: info}
+            exp_annotations:
+              summary: "Test alert sent on purpose for local; harmless, clears 5 minutes after the last send"
+      - eval_time: 5m
+        alertname: AIOpsTestAlert
+        exp_alerts:
+          - exp_labels: {service_name: aiops-test-alert, deployment_environment_name: local, severity: info}
+            exp_annotations:
+              summary: "Test alert sent on purpose for local; harmless, clears 5 minutes after the last send"
+      - eval_time: 6m
+        alertname: AIOpsTestAlert
+        exp_alerts: []
+
+  - name: a forgotten test alert clears on its own 5 minutes after the last send
+    interval: 1m
+    input_series:
+      - series: 'gaik_aiops_test_alert{service_name="aiops-test-alert"}'
+        values: '1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AIOpsTestAlert
+        exp_alerts:
+          - exp_labels: {service_name: aiops-test-alert, severity: info}
+            exp_annotations:
+              summary: "Test alert sent on purpose; harmless, clears 5 minutes after the last send"
+      - eval_time: 5m
+        alertname: AIOpsTestAlert
+        exp_alerts: []

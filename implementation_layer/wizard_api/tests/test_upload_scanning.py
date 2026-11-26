@@ -486,3 +486,224 @@ def test_a_pdf_with_javascript_never_reaches_the_scanner(client, db_session, cla
     assert res.status_code == 422 and res.json()["detail"]["error"] == "input_unsafe"
     assert "JavaScript" in res.json()["detail"]["message"]
     assert clamd.received == []
+
+
+# ---------------------------------------------------------------------------
+# Another scanner over ICAP
+# ---------------------------------------------------------------------------
+
+
+class FakeIcap:
+    """An ICAP antivirus server on a free port: reads one RESPMOD per connection."""
+
+    def __init__(self, answer: bytes | None = None, hang: bool = False) -> None:
+        self.answer = answer
+        self.hang = hang
+        self.requests: list[bytes] = []
+        self.bodies: list[bytes] = []
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen()
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                self._handle(conn)
+
+    def _handle(self, conn: socket.socket) -> None:
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            part = conn.recv(4096)
+            if not part:
+                return
+            buf += part
+        head, _, rest = buf.partition(b"\r\n\r\n")
+        self.requests.append(head)
+        if head.startswith(b"OPTIONS"):
+            conn.sendall(self.answer or b"ICAP/1.0 200 OK\r\nMethods: RESPMOD\r\n\r\n")
+            return
+        encapsulated = [
+            ln for ln in head.split(b"\r\n") if ln.lower().startswith(b"encapsulated:")
+        ][0]
+        body_at = int(encapsulated.split(b"res-body=")[1].split(b",")[0])
+        while len(rest) < body_at:
+            rest += conn.recv(4096)
+        rest = rest[body_at:]
+        body = b""
+        while True:
+            while b"\r\n" not in rest:
+                rest += conn.recv(65536)
+            size_line, _, rest = rest.partition(b"\r\n")
+            size = int(size_line, 16)
+            while len(rest) < size + 2:
+                rest += conn.recv(65536)
+            if size == 0:
+                break
+            body, rest = body + rest[:size], rest[size + 2 :]
+        self.bodies.append(body)
+        if self.hang:
+            time.sleep(5)
+            return
+        if self.answer is not None:
+            conn.sendall(self.answer)
+        elif EICAR in body:
+            conn.sendall(
+                b"ICAP/1.0 200 OK\r\n"
+                b"X-Infection-Found: Type=0; Resolution=2; Threat=Eicar-Test-Signature;\r\n"
+                b"Encapsulated: res-hdr=0, res-body=19\r\n\r\n"
+                b"HTTP/1.1 403 Forbidden\r\n\r\n0\r\n\r\n"
+            )
+        else:
+            conn.sendall(b'ICAP/1.0 204 No Content\r\nISTag: "fake-1"\r\n\r\n')
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+def _icap(monkeypatch, **kwargs) -> FakeIcap:
+    server = FakeIcap(**kwargs)
+    monkeypatch.setenv("WIZARD_MALWARE_SCANNER", f"icap://127.0.0.1:{server.port}/avscan")
+    monkeypatch.delenv("WIZARD_MALWARE_SCAN", raising=False)
+    return server
+
+
+def test_the_scanner_setting_names_clamav_by_default_or_an_icap_service(monkeypatch):
+    for raw, expected in [
+        ("scanner:3310", malware_scan.Scanner("clamd", "scanner", 3310)),
+        ("scanner", malware_scan.Scanner("clamd", "scanner", 3310)),
+        ("clamd://scanner:3311", malware_scan.Scanner("clamd", "scanner", 3311)),
+        (
+            "icap://av.example.org:1345/avscan",
+            malware_scan.Scanner("icap", "av.example.org", 1345, "/avscan"),
+        ),
+        (
+            "ICAP://av.example.org/av/respmod",
+            malware_scan.Scanner("icap", "av.example.org", 1344, "/av/respmod"),
+        ),
+        ("icap://av.example.org", malware_scan.Scanner("icap", "av.example.org", 1344, "/")),
+    ]:
+        monkeypatch.setenv("WIZARD_MALWARE_SCANNER", raw)
+        assert malware_scan.scanner() == expected, raw
+    monkeypatch.delenv("WIZARD_MALWARE_SCAN", raising=False)
+    assert malware_scan.mode() == "required"
+
+
+def test_an_unknown_kind_of_scanner_refuses_every_upload(monkeypatch):
+    monkeypatch.setenv("WIZARD_MALWARE_SCANNER", "ftp://scanner:21")
+    monkeypatch.delenv("WIZARD_MALWARE_SCAN", raising=False)
+    with pytest.raises(malware_scan.ScannerUnavailableError):
+        asyncio.run(malware_scan.check_upload(b"hello"))
+
+
+def test_an_icap_scanner_passes_a_clean_file_and_gets_the_whole_file(monkeypatch):
+    server = _icap(monkeypatch)
+    data = os.urandom(200 * 1024)
+    try:
+        asyncio.run(malware_scan.check_upload(data))
+    finally:
+        server.close()
+    assert server.bodies == [data]
+    head = server.requests[0].decode()
+    assert head.startswith(f"RESPMOD icap://127.0.0.1:{server.port}/avscan ICAP/1.0")
+    assert "Allow: 204" in head
+
+
+def test_an_icap_finding_is_refused_with_our_own_words(monkeypatch):
+    server = _icap(monkeypatch)
+    try:
+        with pytest.raises(malware_scan.UnsafeInputError) as raised:
+            asyncio.run(malware_scan.check_upload(b"before " + EICAR + b" after"))
+    finally:
+        server.close()
+    assert raised.value.signature == "Eicar-Test-Signature"
+    assert "Eicar" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "header, threat",
+    [
+        (b"X-Virus-ID: W32/Test.A\r\n", "W32/Test.A"),
+        (b"X-Violations-Found: 1\r\n", "1"),
+        (b"X-Virus-Name: Test.Name\r\n", "Test.Name"),
+    ],
+)
+def test_each_icap_finding_header_is_read(monkeypatch, header, threat):
+    server = _icap(
+        monkeypatch, answer=b"ICAP/1.0 200 OK\r\n" + header + b"Encapsulated: null-body=0\r\n\r\n"
+    )
+    try:
+        with pytest.raises(malware_scan.UnsafeInputError) as raised:
+            asyncio.run(malware_scan.check_upload(b"anything"))
+    finally:
+        server.close()
+    assert raised.value.signature == threat
+
+
+def test_an_icap_error_page_without_a_finding_header_is_a_refusal(monkeypatch):
+    answer = (
+        b"ICAP/1.0 200 OK\r\nEncapsulated: res-hdr=0, res-body=26\r\n\r\n"
+        b"HTTP/1.1 403 Forbidden\r\n\r\n0\r\n\r\n"
+    )
+    server = _icap(monkeypatch, answer=answer)
+    try:
+        with pytest.raises(malware_scan.UnsafeInputError):
+            asyncio.run(malware_scan.check_upload(b"anything"))
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # The file sent back unchanged: no verdict, so no pass.
+        b"ICAP/1.0 200 OK\r\nEncapsulated: res-hdr=0, res-body=19\r\n\r\n"
+        b"HTTP/1.1 200 OK\r\n\r\n0\r\n\r\n",
+        b"ICAP/1.0 500 Server Error\r\n\r\n",
+        b"ICAP/1.0 404 Service Not Found\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\n\r\n",
+        b"",
+    ],
+)
+def test_an_icap_answer_that_is_no_verdict_refuses_the_upload(monkeypatch, answer):
+    server = _icap(monkeypatch, answer=answer)
+    try:
+        with pytest.raises(malware_scan.ScannerUnavailableError):
+            asyncio.run(malware_scan.check_upload(b"anything"))
+    finally:
+        server.close()
+
+
+def test_an_icap_scanner_that_does_not_answer_is_given_up_on_time(monkeypatch):
+    server = _icap(monkeypatch, hang=True)
+    monkeypatch.setattr(malware_scan, "SCAN_TIMEOUT_SECONDS", 0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(malware_scan.ScannerUnavailableError):
+            asyncio.run(malware_scan.check_upload(b"anything"))
+    finally:
+        server.close()
+    assert time.monotonic() - started < 3
+
+
+def test_an_icap_scanner_that_is_down_refuses_the_upload(monkeypatch):
+    monkeypatch.setenv("WIZARD_MALWARE_SCANNER", f"icap://127.0.0.1:{_free_port()}/avscan")
+    monkeypatch.delenv("WIZARD_MALWARE_SCAN", raising=False)
+    with pytest.raises(malware_scan.ScannerUnavailableError):
+        asyncio.run(malware_scan.check_upload(b"anything"))
+
+
+def test_the_probe_asks_an_icap_scanner_for_its_options(monkeypatch):
+    server = _icap(monkeypatch)
+    try:
+        assert malware_scan.probe() == malware_scan.ScannerState(True, None)
+        assert server.requests[-1].startswith(b"OPTIONS icap://127.0.0.1:")
+    finally:
+        server.close()
+    monkeypatch.setenv("WIZARD_MALWARE_SCANNER", f"icap://127.0.0.1:{_free_port()}/avscan")
+    assert malware_scan.probe() == malware_scan.ScannerState(False, None)

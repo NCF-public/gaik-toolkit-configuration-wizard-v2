@@ -157,6 +157,20 @@ export async function stopAgentChat(id: string): Promise<Response> {
   });
 }
 
+/**
+ * Gives the session's recording answer, which wizard_api takes once. Raw
+ * Response: the caller tells "already answered" (409) from a failure.
+ */
+export async function apiAnswerRecording(id: string, answer: SessionRecording): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/recording`, {
+    method: "POST",
+    headers: { ...(await outgoingHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ aiops_recording: answer }),
+    cache: "no-store",
+  });
+}
+
 async function wizardFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
   const res = await fetch(`${base}${path}`, {
@@ -185,11 +199,14 @@ export class WizardApiError extends Error {
   readonly status: number;
   readonly code: string | undefined;
   readonly reason: string | undefined;
+  /** The answer's body as it came; a relay passes it on only through lib/safe-error. */
+  readonly body: string;
 
   constructor(status: number, path: string, body: string) {
     super(`wizard_api ${status} ${path}: ${body}`);
     this.name = "WizardApiError";
     this.status = status;
+    this.body = body;
     this.code = detailField(body, "error");
     this.reason = detailField(body, "reason");
   }
@@ -224,6 +241,8 @@ export type ApiSessionDetail = {
   metadata: Record<string, unknown>;
   output_dir: string;
   active_version: number;
+  /** "stored", "not_stored" or "not_asked"; missing from an API older than the question. */
+  aiops_recording?: string;
   versions: ApiBlueprintVersion[];
   blueprint: {
     name: string;
@@ -294,6 +313,10 @@ export type ApiSessionSummary = {
   updated_at: string;
 };
 
+/** The user's answer to whether a session's data may be stored for AIOps. */
+export type SessionRecording = "stored" | "not_stored";
+
+/** The session starts as not asked: its chat asks the recording question (apiAnswerRecording). */
 export async function apiCreateSession(userId: string, title: string) {
   return wizardFetch<ApiSessionDetail>("/sessions", {
     method: "POST",
@@ -397,20 +420,30 @@ export async function apiPostVersion(
   });
 }
 
+/**
+ * `baseVersion`: the version the edit was made on; wizard_api refuses the save
+ * over a newer one (409 changed_elsewhere). Without it the save writes over
+ * whatever is there (the user chose to keep their edit).
+ */
 export async function apiPatchBlueprint(
   id: string,
   content: ApiSessionDetail["blueprint"],
   note = "Blueprint päivitetty",
+  baseVersion?: number,
 ) {
   return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}/blueprint`, {
     method: "PATCH",
-    body: JSON.stringify({ content, note }),
+    body: JSON.stringify({ content, note, ...(baseVersion === undefined ? {} : { base_version: baseVersion }) }),
   });
 }
 
-export async function apiGetSessionBpmn(id: string): Promise<string> {
+export async function apiGetSessionBpmn(
+  id: string,
+  { dataObjects = true }: { dataObjects?: boolean } = {},
+): Promise<string> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
-  const res = await fetch(`${base}/sessions/${encodeURIComponent(id)}/bpmn`, {
+  const query = dataObjects ? "" : "?data_objects=0";
+  const res = await fetch(`${base}/sessions/${encodeURIComponent(id)}/bpmn${query}`, {
     headers: await outgoingHeaders(),
     cache: "no-store",
   });
@@ -421,10 +454,12 @@ export async function apiGetSessionBpmn(id: string): Promise<string> {
   return res.text();
 }
 
-export async function apiSyncSessionBpmn(id: string, xml: string) {
+/** `baseVersion`: the version the canvas was drawn from; wizard_api requires it
+ * for a save to the agent's draft and checks it under the session's lock. */
+export async function apiSyncSessionBpmn(id: string, xml: string, baseVersion?: number) {
   return wizardFetch<ApiSessionDetail>(`/sessions/${encodeURIComponent(id)}/bpmn/sync`, {
     method: "POST",
-    body: JSON.stringify({ xml }),
+    body: JSON.stringify({ xml, ...(baseVersion === undefined ? {} : { base_version: baseVersion }) }),
   });
 }
 
@@ -440,6 +475,8 @@ export type ApiPocFiles = {
   package_files?: string[];
   /** What the deployable package carries beside poc/: blueprint, diagrams, documentation. */
   solution_files?: string[];
+  /** Whether the package carries app.py + ui/solution.json so the opt-in Next.js starter can be bundled. */
+  supports_frontend?: boolean;
   /** Whether the files add up to a package worth handing over (wizard_api's package check). */
   ready?: boolean;
   /** What is missing when `ready` is false. */
@@ -496,8 +533,39 @@ export async function apiPutPocFile(
 /** `uploaded` is false for an example the wizard wrote there itself. */
 export type ApiPocInput = { name: string; bytes: number; uploaded?: boolean };
 
-export async function apiListPocInputs(id: string): Promise<{ files: ApiPocInput[] }> {
-  return wizardFetch<{ files: ApiPocInput[] }>(`/sessions/${encodeURIComponent(id)}/poc/input`);
+export type ApiExpectedPocInput = {
+  kind: string;
+  label: string;
+  extensions: string[];
+  multiple?: boolean;
+  required?: boolean;
+  can_synthesize?: boolean;
+};
+
+export type ApiAcceptedPocInput = {
+  kind?: string;
+  label: string;
+  extensions: string[];
+};
+
+export type ApiPocInputsResponse = {
+  files: ApiPocInput[];
+  expected_inputs?: ApiExpectedPocInput[];
+  accepted_inputs?: ApiAcceptedPocInput[];
+};
+
+export async function apiListPocInputs(id: string): Promise<ApiPocInputsResponse> {
+  return wizardFetch<ApiPocInputsResponse>(`/sessions/${encodeURIComponent(id)}/poc/input`);
+}
+
+export async function apiCreatePocSampleInput(id: string, kind?: string, slotIndex?: number): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/input/sample`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await outgoingHeaders()) },
+    body: JSON.stringify({ kind, slot_index: slotIndex }),
+    cache: "no-store",
+  });
 }
 
 /**
@@ -529,9 +597,13 @@ export async function apiDeletePocInput(id: string, name: string): Promise<Respo
  * after a run it recorded as successful, without sample input and run output.
  * Raw Response so the route can relay the zip, or the api's 409 saying why not.
  */
-export async function apiGetDeployablePocZip(id: string): Promise<Response> {
+export async function apiGetDeployablePocZip(
+  id: string,
+  options?: { includeFrontend?: boolean },
+): Promise<Response> {
   const base = getWizardApiUrl() ?? DEFAULT_API_URL;
-  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/deployable`, {
+  const query = options?.includeFrontend ? "?include_frontend=true" : "";
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/poc/deployable${query}`, {
     headers: await outgoingHeaders(),
     cache: "no-store",
   });
@@ -640,4 +712,66 @@ export async function apiCases(id: string, subpath: string, init: RequestInit = 
     headers: { ...(await outgoingHeaders()), ...(init.headers as Record<string, string> | undefined) },
     cache: "no-store",
   });
+}
+
+// -- edits to the full blueprint draft (routers/blueprint_edit.py) ---------------
+//
+// Raw Responses: the Next routes pass a refusal on (409 changed_elsewhere,
+// 422 invalid_operation...) through lib/safe-error and trim a success.
+
+async function sendJson(path: string, method: string, body?: unknown): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}${path}`, {
+    method,
+    headers:
+      body === undefined
+        ? await outgoingHeaders()
+        : { "Content-Type": "application/json", ...(await outgoingHeaders()) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    cache: "no-store",
+  });
+}
+
+const sessionPath = (id: string, rest: string) => `/sessions/${encodeURIComponent(id)}/${rest}`;
+const dataObjectsQuery = (dataObjects: boolean) => `?data_objects=${dataObjects ? 1 : 0}`;
+
+/** `{base_version, operations}` applied to the draft: 200 `{session, warnings, needs_attention, bpmn_changed}`. */
+export async function apiPostOperations(id: string, body: unknown): Promise<Response> {
+  return sendJson(sessionPath(id, "blueprint/operations"), "POST", body);
+}
+
+/** `{base_version}`: back to the blueprint before the last write; 200 the session. */
+export async function apiUndoBlueprint(id: string, body: unknown): Promise<Response> {
+  return sendJson(sessionPath(id, "blueprint/undo"), "POST", body);
+}
+
+/** Where the user placed the diagram's shapes and edges, for one drawing mode; 204. */
+export async function apiPutBpmnLayout(
+  id: string,
+  body: unknown,
+  { dataObjects = true }: { dataObjects?: boolean } = {},
+): Promise<Response> {
+  return sendJson(sessionPath(id, `bpmn/layout${dataObjectsQuery(dataObjects)}`), "PUT", body);
+}
+
+/** `{mapping: {element_id: {kind, blueprint_path}}}` of the diagram drawn in that mode. */
+export async function apiGetBpmnMapping(
+  id: string,
+  { dataObjects = true }: { dataObjects?: boolean } = {},
+): Promise<Response> {
+  return sendJson(sessionPath(id, `bpmn/mapping${dataObjectsQuery(dataObjects)}`), "GET");
+}
+
+/** `{version, draft, readonly_sections, draft_digest}`: the full draft; 409 no_draft before there is one. */
+export async function apiGetFullBlueprint(id: string): Promise<Response> {
+  return sendJson(sessionPath(id, "blueprint/full"), "GET");
+}
+
+/**
+ * `{base_version, base_digest, draft}`: the full draft saved whole, `base_digest`
+ * the `draft_digest` it was read with (409 changed_elsewhere once the file has
+ * changed since); answers as the operations do.
+ */
+export async function apiPutFullBlueprint(id: string, body: unknown): Promise<Response> {
+  return sendJson(sessionPath(id, "blueprint/full"), "PUT", body);
 }

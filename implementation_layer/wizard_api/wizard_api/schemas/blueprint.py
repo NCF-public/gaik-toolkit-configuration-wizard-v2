@@ -97,6 +97,9 @@ class SessionDetailResponse(BaseModel):
     metadata: dict
     output_dir: str
     active_version: int
+    #: ``stored``, ``not_stored`` or ``not_asked``: whether the session's traces
+    #: leave the API for the AIOps stack. Only ``stored`` does.
+    aiops_recording: str = "not_asked"
     versions: list[BlueprintVersionSummary]
     blueprint: BlueprintContent
     business_context: BusinessContext | None = None

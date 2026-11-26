@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from wizard_api.services import pdf_content, poc_service
+from wizard_api.services import image_metadata, pdf_content, poc_service
 
 # ---------------------------------------------------------------------------
 # The supported types
@@ -129,6 +129,8 @@ class UnsupportedInputError(poc_service.InputRejectedError):
 
 class InvalidInputError(poc_service.InputRejectedError):
     """The content is an accepted type but not a usable file of it (422)."""
+
+    reason = "unreadable"
 
 
 class UnsafeContentError(InvalidInputError):
@@ -361,6 +363,23 @@ def _check_text(data: bytes, kind: str) -> None:
             raise InvalidInputError("the JSON file is not valid JSON") from exc
 
 
+def without_image_metadata(kind: str, data: bytes) -> tuple[bytes, tuple[str, ...]]:
+    """An image of ``kind`` without the text its file carries besides the pixels
+    (EXIF with the GPS position, XMP, IPTC, PNG text, comments), and what was
+    removed; any other kind as it is. The agent, the PoC and its model then see
+    only the picture (``image_metadata``)."""
+    if kind not in IMAGE_KINDS:
+        return data, ()
+    try:
+        return image_metadata.strip_image_metadata(data, strict=True)
+    except image_metadata.UnreadableImageError as exc:
+        # Not stored with text no one can see: the user gets the file back.
+        raise UnsafeContentError(
+            f"the {kind.upper()} image could not be read to remove the text its file "
+            "carries besides the picture. Save it again as PNG or JPEG and upload it."
+        ) from exc
+
+
 def check(filename: str, data: bytes, allowed: frozenset[str] = ALL_KINDS) -> str:
     """Return the file's kind, or raise if it is not one ``allowed`` accepts.
 
@@ -376,7 +395,7 @@ def check(filename: str, data: bytes, allowed: frozenset[str] = ALL_KINDS) -> st
     if kind is None or kind not in allowed:
         raise UnsupportedInputError(f"this file type is not accepted here; {accepted}")
     if not data:
-        raise poc_service.InputRejectedError("the file is empty")
+        raise poc_service.InputRejectedError("the file is empty", reason="empty")
 
     sniffed = _sniff_binary(data)
     # An archive is opened only where an office format is declared; any other

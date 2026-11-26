@@ -215,6 +215,8 @@ def test_a_chat_turn_resumes_the_remembered_cli_session_and_tells_about_a_restar
     assert json.loads(frames[0]) == {"delta": agent_service.RESTART_NOTICE["fi"]}  # first
     detail = client.get(f"/sessions/{sid}").json()
     assert detail["metadata"]["agent_sdk_session_id"] == SDK_NEW
+    # The replaced conversation stays listed, so removing the session finds it.
+    assert detail["metadata"]["agent_sdk_session_ids"] == sorted({SDK_OLD, SDK_NEW})
     assert detail["metadata"]["messages"][-1]["content"].startswith("⟳ Wizard käynnistettiin")
 
 
@@ -391,3 +393,40 @@ def test_a_malformed_stored_agent_session_id_is_not_resumed(
     assert "malformed agent session id" in caplog.text
     detail = client.get(f"/sessions/{sid}").json()
     assert detail["metadata"]["agent_sdk_session_id"] == SDK_FRESH
+
+
+@requires_postgres
+@pytest.mark.parametrize("answer", ["stored", "not_stored"])
+def test_a_session_keeps_the_recording_answer_it_was_created_with(client, answer) -> None:
+    created = client.post("/sessions", json={"user_id": "u", "aiops_recording": answer})
+    assert created.status_code == 201
+    assert created.json()["aiops_recording"] == answer
+    sid = created.json()["id"]
+
+    assert client.get(f"/sessions/{sid}").json()["aiops_recording"] == answer
+    (listed,) = client.get("/sessions", params={"user_id": "u"}).json()["sessions"]
+    assert listed["aiops_recording"] == answer
+
+
+@requires_postgres
+def test_a_session_created_without_an_answer_was_not_asked(client) -> None:
+    created = client.post("/sessions", json={"user_id": "u"})
+    assert created.json()["aiops_recording"] == "not_asked"
+
+
+@requires_postgres
+def test_a_recording_answer_the_api_does_not_know_is_refused(client) -> None:
+    for answer in ("not_asked", "yes", ""):
+        refused = client.post("/sessions", json={"user_id": "u", "aiops_recording": answer})
+        assert refused.status_code == 422
+
+
+@requires_postgres
+def test_the_recording_answer_cannot_be_changed_by_a_patch(client) -> None:
+    sid = client.post("/sessions", json={"user_id": "u", "aiops_recording": "not_stored"})
+    sid = sid.json()["id"]
+    patched = client.patch(f"/sessions/{sid}", json={"aiops_recording": "stored"})
+    # The unknown field is ignored, not an error: the patch itself changes nothing.
+    assert patched.status_code == 200
+    assert patched.json()["aiops_recording"] == "not_stored"
+    assert client.get(f"/sessions/{sid}").json()["aiops_recording"] == "not_stored"

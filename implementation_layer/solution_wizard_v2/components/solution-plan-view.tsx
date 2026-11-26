@@ -461,6 +461,7 @@ export function SolutionPlanView({
   extractionProposal = null,
   wizardStep = 0,
   gate1Approved = false,
+  gate2Approved = false,
   t,
   note,
 }: {
@@ -471,6 +472,8 @@ export function SolutionPlanView({
   extractionProposal?: ExtractionProposal | null;
   wizardStep?: number;
   gate1Approved?: boolean;
+  /** Past Gate 2 the extraction guide is never offered for approval again (#325). */
+  gate2Approved?: boolean;
   t: Dict;
   /** A line above the plan, e.g. what a change costs once the package is tested. */
   note?: ReactNode;
@@ -484,6 +487,7 @@ export function SolutionPlanView({
   const proposalStatus = extractionProposalStatus({
     wizardStep,
     gate1Approved,
+    gate2Approved,
     fieldCount: outputFields.length,
     proposal: extractionProposal,
   });

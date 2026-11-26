@@ -8,6 +8,13 @@ GATE_KEYS = ("gate_1", "gate_2", "gate_3", "gate_4")
 MIN_STEP = 1
 MAX_STEP = 13
 
+#: The user's answer to "may this session's data be stored for AIOps?", asked
+#: when the session starts. Only a ``stored`` session's spans leave the pod
+#: (``telemetry.RecordingGate``); a session nobody asked is not stored.
+RECORDING_STORED = "stored"
+RECORDING_NOT_STORED = "not_stored"
+RECORDING_NOT_ASKED = "not_asked"
+
 #: The step each gate sits on, mirroring the UI's GATE_STEP_TO_API. The browser
 #: knew this and the server did not, so a step change that skipped a pending
 #: gate was accepted: the agent could walk a session past Gate 1 while the user

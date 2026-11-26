@@ -28,6 +28,23 @@ tests:
             exp_annotations:
               summary: "api: 16.67% of requests fail"
 
+  - name: error ratio is per environment, s4's traffic does not dilute staging's errors
+    interval: 1m
+    input_series:
+      - series: 'traces_span_metrics_calls_total{service_name="api", deployment_environment_name="s4", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_OK"}'
+        values: '0+100x20'
+      - series: 'traces_span_metrics_calls_total{service_name="api", deployment_environment_name="staging", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_OK"}'
+        values: '0+10x20'
+      - series: 'traces_span_metrics_calls_total{service_name="api", deployment_environment_name="staging", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+2x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighErrorRatio
+        exp_alerts:
+          - exp_labels: {service_name: api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "api: 16.67% of requests fail"
+
   - name: p95 latency above threshold fires after 10 minutes
     interval: 1m
     input_series:
@@ -158,3 +175,79 @@ tests:
           - exp_labels: {exporter: otlphttp/sink, severity: warning}
             exp_annotations:
               summary: "otlphttp/sink: 8 batches waiting for delivery"
+
+  # A wizard session whose user did not allow storing sends no spans, so the spans
+  # show only part of the traffic. The HTTP server metric counts every request.
+  - name: a service with the HTTP server metric is judged by it, not by its spans
+    interval: 1m
+    input_series:
+      # The spans that did arrive are all fine.
+      - series: 'traces_span_metrics_calls_total{service_name="api", deployment_environment_name="staging", span_kind="SPAN_KIND_SERVER", span_name="GET /sessions", status_code="STATUS_CODE_OK"}'
+        values: '0+10x20'
+      - series: 'http_server_request_duration_seconds_count{service_name="api", deployment_environment_name="staging", http_request_method="GET", http_route="/sessions/{session_id}", http_response_status_code="200"}'
+        values: '0+10x20'
+      - series: 'http_server_request_duration_seconds_count{service_name="api", deployment_environment_name="staging", http_request_method="GET", http_route="/sessions/{session_id}", http_response_status_code="500", error_type="500"}'
+        values: '0+2x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighErrorRatio
+        exp_alerts:
+          - exp_labels: {service_name: api, deployment_environment_name: staging, severity: warning}
+            exp_annotations:
+              summary: "api: 16.67% of requests fail"
+    promql_expr_test:
+      # 12 requests a minute, named as the span would be; the spans' own route is not listed.
+      - expr: round(gaik:requests:rate5m, 0.01)
+        eval_time: 10m
+        exp_samples:
+          - labels: '{service_name="api", deployment_environment_name="staging", span_name="GET /sessions/{session_id}"}'
+            value: 0.2
+
+  - name: with the HTTP server metric and no failures the error ratio is 0, whatever the spans say
+    interval: 1m
+    input_series:
+      - series: 'traces_span_metrics_calls_total{service_name="api", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_OK"}'
+        values: '0+10x20'
+      - series: 'traces_span_metrics_calls_total{service_name="api", span_kind="SPAN_KIND_SERVER", status_code="STATUS_CODE_ERROR"}'
+        values: '0+10x20'
+      - series: 'http_server_request_duration_seconds_count{service_name="api", http_request_method="GET", http_route="/sessions", http_response_status_code="200"}'
+        values: '0+10x20'
+    promql_expr_test:
+      - expr: gaik:request_errors:ratio5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'gaik:request_errors:ratio5m{service_name="api"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighErrorRatio
+        exp_alerts: []
+
+  - name: p95 latency comes from the HTTP server metric in seconds, without its streaming routes
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_bucket{service_name="api", http_route="/sessions", le="1"}'
+        values: '0x30'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="api", http_route="/sessions", le="2.5"}'
+        values: '0+10x30'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="api", http_route="/sessions", le="+Inf"}'
+        values: '0+10x30'
+      - series: 'http_server_request_duration_seconds_count{service_name="api", http_route="/sessions"}'
+        values: '0+10x30'
+      # A chat turn stays open for minutes: it is not request latency.
+      - series: 'http_server_request_duration_seconds_bucket{service_name="api", http_route="/sessions/{session_id}/chat", le="10"}'
+        values: '0x30'
+      - series: 'http_server_request_duration_seconds_bucket{service_name="api", http_route="/sessions/{session_id}/chat", le="+Inf"}'
+        values: '0+10x30'
+      # Fast spans of the same service do not hide it.
+      - series: 'traces_span_metrics_duration_milliseconds_bucket{service_name="api", span_kind="SPAN_KIND_SERVER", span_name="GET /sessions", le="100"}'
+        values: '0+10x30'
+      - series: 'traces_span_metrics_duration_milliseconds_bucket{service_name="api", span_kind="SPAN_KIND_SERVER", span_name="GET /sessions", le="+Inf"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighLatencyP95
+        exp_alerts:
+          - exp_labels: {service_name: api, severity: warning}
+            exp_annotations:
+              summary: "api: p95 latency 2.425k ms"
