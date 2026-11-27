@@ -205,8 +205,7 @@ def _with_report_and_send(
     *, report_art=None, send_params=None, targets=(ERP_TARGET,), outputs=("pdf",)
 ):
     """The live run's shape: a step writes the report, erp_submission sends to the
-    ERP. (The live run's report step was invoice_pdf_report; with "pdf" in its id
-    the diagram adds no report anyway, so no hint is given for it.)"""
+    ERP."""
     artifacts = {"invoice_pdf": {"type": "pdf", "source": "user_upload"}}
     if report_art is not None:
         artifacts["invoice_report"] = report_art
@@ -239,51 +238,6 @@ def test_steps_marked_as_the_report_and_the_submission_are_not_reported():
     draft = _with_report_and_send(
         report_art=GENERATED_PDF, send_params={"integration_target": ERP_TARGET}
     )
-
-    assert session_service.process_reference_problems(draft) == []
-
-
-def test_an_unmarked_submission_step_is_asked_for_its_target():
-    problems = session_service.process_reference_problems(
-        _with_report_and_send(report_art=GENERATED_PDF)
-    )
-
-    assert problems == [
-        (
-            "workflow.steps[2]",
-            "Submit to the ERP",
-            f'looks like it sends to the integration target "{ERP_TARGET}": if it does, set '
-            f'parameters.integration_target to "{ERP_TARGET}", so the diagram does not add a '
-            "second submission",
-        )
-    ]
-
-
-def test_a_report_step_without_a_generated_pdf_is_asked_for_one():
-    problems = session_service.process_reference_problems(
-        _with_report_and_send(send_params={"integration_target": ERP_TARGET})
-    )
-
-    assert problems == [
-        (
-            "workflow.steps[1]",
-            "Create the PDF report",
-            "looks like the step that writes the PDF report: if it is, give it an output "
-            'artifact of type "pdf" with source "generated", final_output true and produced_by '
-            "this step, so the diagram does not add a second report",
-        )
-    ]
-
-
-def test_no_hint_without_a_pdf_output_or_an_integration_target():
-    assert (
-        session_service.process_reference_problems(_with_report_and_send(targets=(), outputs=()))
-        == []
-    )
-
-
-def test_a_target_whose_words_no_step_shares_gets_no_hint():
-    draft = _with_report_and_send(report_art=GENERATED_PDF, targets=("archive_system",))
 
     assert session_service.process_reference_problems(draft) == []
 
@@ -398,136 +352,80 @@ def _steps(draft):
     return draft["workflow"]["steps"]
 
 
-def test_a_step_with_pdf_in_its_id_gets_no_report_hint():
-    """The diagram adds no report while a step's id has "pdf" in it, so there is
-    no second report to warn about."""
-    draft = _with_report_and_send(send_params={"integration_target": ERP_TARGET})
-    _steps(draft)[1]["id"] = "invoice_pdf_report"
-
-    assert session_service.process_reference_problems(draft) == []
-
-
-def test_steps_that_read_or_review_the_report_are_not_taken_for_its_writer():
-    draft = _with_report_and_send(send_params={"integration_target": ERP_TARGET})
-    _steps(draft)[1:2] = [
-        {"id": "parse", "name": "Parse the invoice PDF"},
-        {"id": "report_review", "name": "Manager reviews the report", "type": "human_review"},
-    ]
-
-    assert session_service.process_reference_problems(draft) == []
-
-
-def test_a_finnish_report_step_is_asked_for_its_pdf():
-    draft = _with_report_and_send(send_params={"integration_target": ERP_TARGET})
-    _steps(draft)[1]["name"] = "Laadi raportin yhteenveto"
-
-    problems = session_service.process_reference_problems(draft)
-
-    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[1]", "Laadi raportin yhteenveto")]
-
-
-def test_a_lookup_in_the_target_is_not_taken_for_the_submission():
-    """The lookup on its own: with no send step after it, nothing is named."""
-    draft = _with_report_and_send(report_art=GENERATED_PDF)
-    _steps(draft)[2] = {"id": "check_erp_status", "name": "Match PO against ERP"}
-
-    assert session_service.process_reference_problems(draft) == []
-
-
 def test_a_marker_that_names_no_target_is_reported_with_the_exact_names():
     draft = _with_report_and_send(
         report_art=GENERATED_PDF, send_params={"integration_target": "erp_system"}
     )
 
-    problems = session_service.process_reference_problems(draft)
+    assert session_service.process_reference_problems(draft) == [
+        (
+            "workflow.steps[2].parameters.integration_target",
+            "Submit to the ERP",
+            f'names no integration target: "erp_system"; use one of the exact names in '
+            f'technical_spec.integration_targets: "{ERP_TARGET}"',
+        )
+    ]
 
-    assert problems[0] == (
-        "workflow.steps[2].parameters.integration_target",
-        "Submit to the ERP",
-        f'names no integration target: "erp_system"; use one of the exact names in '
-        f'technical_spec.integration_targets: "{ERP_TARGET}"',
+
+def test_a_marker_without_any_targets_says_the_list_is_empty():
+    draft = _with_report_and_send(
+        report_art=GENERATED_PDF, send_params={"integration_target": "erp"}, targets=()
     )
+
+    (problem,) = session_service.process_reference_problems(draft)
+
+    assert (
+        problem[2]
+        == 'names no integration target: "erp"; technical_spec.integration_targets is empty'
+    )
+
+
+def test_a_name_that_only_looks_like_a_step_for_the_work_gets_no_hint():
+    """Steps are not taken for the report or a submission by their names: an
+    unmarked "Create the PDF report" and "Submit to the ERP" are left alone."""
+    assert session_service.process_reference_problems(_with_report_and_send()) == []
+
+
+# The guards: a malformed field is skipped, and the check still runs past it.
+# Each draft also has a marker naming no target, which must still be reported.
+
+UNKNOWN = {"integration_target": "erp_system"}
+
+
+def _marker_paths(draft):
+    return [p for p, _, _ in session_service.process_reference_problems(draft)]
 
 
 def test_parameters_that_are_not_an_object_do_not_drop_the_note():
-    draft = _with_report_and_send(report_art=GENERATED_PDF)
-    _steps(draft)[2]["parameters"] = ["x"]
+    draft = _with_report_and_send(report_art=GENERATED_PDF, send_params=UNKNOWN)
+    _steps(draft)[1]["parameters"] = ["x"]
     _steps(draft)[0]["parameters"] = {"integration_target": {"not": "a name"}}
 
-    problems = session_service.process_reference_problems(draft)
-
-    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[2]", "Submit to the ERP")]
+    assert _marker_paths(draft) == ["workflow.steps[2].parameters.integration_target"]
 
 
 def test_outputs_that_are_not_a_list_do_not_drop_the_note():
-    draft = _with_report_and_send(report_art=GENERATED_PDF)
+    draft = _with_report_and_send(report_art=GENERATED_PDF, send_params=UNKNOWN)
     _steps(draft)[0]["outputs"] = 5
 
-    problems = session_service.process_reference_problems(draft)
-
-    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[2]", "Submit to the ERP")]
+    assert _marker_paths(draft) == ["workflow.steps[2].parameters.integration_target"]
 
 
-def test_a_sync_from_the_target_or_a_supplier_step_is_not_taken_for_the_submission():
-    draft = _with_report_and_send(report_art=GENERATED_PDF)
-    _steps(draft)[2:3] = [
-        {"id": "vendors", "name": "Sync vendor master from ERP"},
-        {"id": "supplier", "name": "Toimittajan tiedot ERP:stä"},
-    ]
+def test_depends_on_that_is_not_a_list_keeps_the_note():
+    draft = _with_report_and_send(report_art=GENERATED_PDF, send_params=UNKNOWN)
+    _steps(draft)[1]["depends_on"] = 3
 
-    assert session_service.process_reference_problems(draft) == []
-
-
-def test_posting_to_the_target_is_taken_for_the_submission():
-    draft = _with_report_and_send(report_art=GENERATED_PDF)
-    _steps(draft)[2] = {"id": "post", "name": "Post the invoice to the ERP"}
-
-    problems = session_service.process_reference_problems(draft)
-
-    assert [(p, n) for p, n, _ in problems] == [
-        ("workflow.steps[2]", "Post the invoice to the ERP")
-    ]
-
-
-def test_an_intermediate_pdf_does_not_silence_the_report_hint():
-    """A generated PDF that is not the final output is not the report, so the
-    diagram still adds one and the report step is asked to mark its PDF."""
-    draft = _with_report_and_send(
-        report_art={**GENERATED_PDF, "final_output": False},
-        send_params={"integration_target": ERP_TARGET},
-    )
-
-    problems = session_service.process_reference_problems(draft)
-
-    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[1]", "Create the PDF report")]
-
-
-def test_an_output_type_the_diagram_does_not_read_as_pdf_gets_no_report_hint():
-    """The generator compares output types exactly: " pdf " adds no report box,
-    so no second report is claimed."""
-    draft = _with_report_and_send(
-        send_params={"integration_target": ERP_TARGET}, outputs=(" pdf ",)
-    )
-
-    assert session_service.process_reference_problems(draft) == []
+    assert _marker_paths(draft) == ["workflow.steps[2].parameters.integration_target"]
 
 
 def test_integration_targets_that_are_not_a_list_keep_the_decision_problems():
-    draft = _with_report_and_send(report_art=GENERATED_PDF)
+    draft = _with_report_and_send(report_art=GENERATED_PDF, send_params=UNKNOWN)
     draft["technical_spec"]["integration_targets"] = 7
     draft["business_process"] = {
         "decision_points": [{"id": "d", "name": "Big?", "after": "", "branches": []}]
     }
 
-    problems = session_service.process_reference_problems(draft)
+    paths = _marker_paths(draft)
 
-    assert any(p.startswith("business_process.decision_points[0]") for p, _, _ in problems)
-
-
-def test_depends_on_that_is_not_a_list_keeps_the_note():
-    draft = _with_report_and_send(report_art=GENERATED_PDF)
-    _steps(draft)[1]["depends_on"] = 3
-
-    problems = session_service.process_reference_problems(draft)
-
-    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[2]", "Submit to the ERP")]
+    assert any(p.startswith("business_process.decision_points[0]") for p in paths)
+    assert "workflow.steps[2].parameters.integration_target" in paths

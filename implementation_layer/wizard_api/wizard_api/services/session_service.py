@@ -370,130 +370,49 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
         if outcome.startswith("loop_to:") and outcome.split(":", 1)[1].strip() not in step_ids:
             problems.append((path, name, f'outcome names no step: "{outcome}"'))
     try:
-        problems.extend(_own_report_and_submission_hints(data, steps))
-    except Exception:  # a hint never takes the decision and path problems with it
-        logger.warning("report and submission hints failed", exc_info=True)
+        problems.extend(_integration_marker_problems(data, steps))
+    except Exception:  # the marker check never takes the decision and path problems with it
+        logger.warning("integration marker check failed", exc_info=True)
     return problems
 
 
-#: Words of an integration target's name too common to tie a step to it.
-_TARGET_STOPWORDS = frozenset(
-    "the and for with from into data system systems database repository store service api "
-    "approved record records invoice invoices document documents management team".split()
-)
-_REPORT_WORDS = re.compile(r"report|raport|pdf", re.IGNORECASE)
-#: A step writes the report when its name says so, not when it reads or reviews one.
-_WRITE_WORDS = re.compile(
-    r"\b(generat|creat|writ|render|mak|compos|produc|prepar|build|laadi|laati|laadin"
-    r"|luo(da|daan)?\b|muodost|tuota|tuott|kirjoit|koost)",
-    re.IGNORECASE,
-)
-#: A step sends to a target when its name says so, not when it looks something up there.
-_SEND_WORDS = re.compile(
-    r"\b(submi|send|export|deliver|transfer|forward|post(s|ed|ing)?\b|vie(\b|d|n)|lähet"
-    r"|siirr|siirt|tallenn)",
-    re.IGNORECASE,
-)
-#: Steps a person does: never the generated report or submission.
-_PERSON_STEPS = frozenset({"user_task", "human_review"})
+def _integration_marker_problems(data: dict, steps: list[dict]) -> list[tuple[str, str, str]]:
+    """Markers that name no integration target.
 
-
-def _words(text: str) -> set[str]:
-    return {w for w in re.split(r"[^0-9a-zäöå]+", text.lower()) if len(w) >= 3}
-
-
-def _step_text(step: dict) -> str:
-    return f"{_text(step.get('id'))} {_text(step.get('name'))}".replace("_", " ")
-
-
-def _own_report_and_submission_hints(data: dict, steps: list[dict]) -> list[tuple[str, str, str]]:
-    """Steps that look like the report or a submission but are not marked as one,
-    and markers that name no integration target.
-
-    Whether the diagram adds a "Generate PDF report" task or a "Submit to …"
-    task is decided by the generator's own rules (``report_box_needed``,
-    ``submit_box_targets`` in solution_wizard's bpmn_generator), so a hint is
-    given only where the drawing has a second box. A step the agent wrote for
-    that work but did not mark is drawn beside the generated one. These are
-    hints, worded "if it does": a step is taken for the report or a submission
-    only by its id or name (an automated step that says it writes a report, or
-    sends to a word of the target), which can be wrong. Without solution_wizard
-    there is no diagram, and no hint.
+    A step that sends to an integration target itself says so in
+    ``parameters.integration_target``, with the target's exact name, and the
+    diagram then draws no generated "Submit to …" task beside it
+    (solution_wizard's bpmn_generator, ``integration_marker``). A marker that
+    matches no name in ``technical_spec.integration_targets`` is not read, so
+    the exact names are quoted for the agent to copy. Without solution_wizard
+    there is no diagram, and nothing to check.
     """
     try:
-        from solution_wizard.bpmn_generator import (
-            integration_marker,
-            report_box_needed,
-            submit_box_targets,
-        )
+        from solution_wizard.bpmn_generator import integration_marker
     except ImportError:  # pragma: no cover - optional in minimal installs
         return []
     spec = data.get("technical_spec")
     spec = spec if isinstance(spec, dict) else {}
     raw_targets = spec.get("integration_targets")
     targets = [str(t) for t in raw_targets] if isinstance(raw_targets, list) else []
-    automated = [(i, s) for i, s in enumerate(steps) if _text(s.get("type")) not in _PERSON_STEPS]
-    hints: list[tuple[str, str, str]] = []
-
-    def name(step: dict) -> str:
-        return _text(step.get("name")) or _text(step.get("id"))
-
-    if report_box_needed(data):
-        found = [
-            (i, s)
-            for i, s in automated
-            if _REPORT_WORDS.search(_step_text(s)) and _WRITE_WORDS.search(_step_text(s))
-        ]
-        if found:
-            i, step = found[-1]
-            hints.append(
-                (
-                    f"workflow.steps[{i}]",
-                    name(step),
-                    "looks like the step that writes the PDF report: if it is, give it an "
-                    'output artifact of type "pdf" with source "generated", final_output '
-                    "true and produced_by this step, so the diagram does not add a second "
-                    "report",
-                )
-            )
-
     exact = ", ".join(f'"{t}"' for t in targets)
+    problems: list[tuple[str, str, str]] = []
     for i, step in enumerate(steps):
         marker = integration_marker(step)
-        if marker is not None and marker not in targets:
-            hints.append(
-                (
-                    f"workflow.steps[{i}].parameters.integration_target",
-                    name(step),
-                    f'names no integration target: "{marker}"; use one of the exact names '
-                    f"in technical_spec.integration_targets: {exact}"
-                    if targets
-                    else f'names no integration target: "{marker}"; '
-                    "technical_spec.integration_targets is empty",
-                )
+        if marker is None or marker in targets:
+            continue
+        problems.append(
+            (
+                f"workflow.steps[{i}].parameters.integration_target",
+                _text(step.get("name")) or _text(step.get("id")),
+                f'names no integration target: "{marker}"; use one of the exact names '
+                f"in technical_spec.integration_targets: {exact}"
+                if targets
+                else f'names no integration target: "{marker}"; '
+                "technical_spec.integration_targets is empty",
             )
-
-    for target in submit_box_targets(data):
-        words = _words(target) - _TARGET_STOPWORDS
-        found = [
-            (i, s)
-            for i, s in automated
-            if integration_marker(s) is None
-            and words & _words(_step_text(s))
-            and _SEND_WORDS.search(_step_text(s))
-        ]
-        if found:
-            i, step = found[-1]
-            hints.append(
-                (
-                    f"workflow.steps[{i}]",
-                    name(step),
-                    f'looks like it sends to the integration target "{target}": if it does, '
-                    f'set parameters.integration_target to "{target}", so the diagram does '
-                    "not add a second submission",
-                )
-            )
-    return hints
+        )
+    return problems
 
 
 def _assumptions_from_draft(data: dict | None) -> list[AssumptionItem]:

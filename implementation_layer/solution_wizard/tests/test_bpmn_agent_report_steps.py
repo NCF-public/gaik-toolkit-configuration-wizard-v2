@@ -18,8 +18,11 @@ choice at an exclusive gateway, every way out of a fork, a join waiting for
 all its ways. So a step entered twice, or a token left waiting, shows.
 """
 
+import json
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
+import pytest
 from solution_wizard.blueprint import Blueprint
 from solution_wizard.bpmn_generator import generate_bpmn
 
@@ -66,35 +69,37 @@ def _art(kind, by=None, *, upload=False, final=False):
     }
 
 
-def _blueprint(
+def _blueprint(steps, artifacts, **kw):
+    return Blueprint.model_validate(_blueprint_dict(steps, artifacts, **kw))
+
+
+def _blueprint_dict(
     steps, artifacts, *, targets=(ERP,), outputs=("structured_json", "pdf"), decisions=()
 ):
     artifacts = dict(artifacts)
     for s in steps:
         for out in s["outputs"]:
             artifacts.setdefault(out, _art("structured_json", s["id"]))
-    return Blueprint.model_validate(
-        {
-            "blueprint_version": "1.0",
-            "use_case": {"id": "uc", "name": "Invoices", "description": "x", "domain": "t"},
-            "business_spec": {"intended_users": ["clerk"], "reviewers": ["manager"]},
-            "technical_spec": {
-                "input_types": ["pdf"],
-                "output_types": list(outputs),
-                "language": "en",
-                "integration_targets": list(targets),
-            },
-            "target_output_spec": {"required_fields": ["a"]},
-            "components": {
-                "selected_modules": [],
-                "selected_building_blocks": [],
-                "custom_components": [],
-            },
-            "artifacts": artifacts,
-            "workflow": {"steps": steps},
-            "business_process": {"decision_points": list(decisions)},
-        }
-    )
+    return {
+        "blueprint_version": "1.0",
+        "use_case": {"id": "uc", "name": "Invoices", "description": "x", "domain": "t"},
+        "business_spec": {"intended_users": ["clerk"], "reviewers": ["manager"]},
+        "technical_spec": {
+            "input_types": ["pdf"],
+            "output_types": list(outputs),
+            "language": "en",
+            "integration_targets": list(targets),
+        },
+        "target_output_spec": {"required_fields": ["a"]},
+        "components": {
+            "selected_modules": [],
+            "selected_building_blocks": [],
+            "custom_components": [],
+        },
+        "artifacts": artifacts,
+        "workflow": {"steps": steps},
+        "business_process": {"decision_points": list(decisions)},
+    }
 
 
 def _decision(did, after, *branches):
@@ -553,3 +558,128 @@ def test_the_shared_rules_read_final_output_as_the_blueprint_does():
     assert report_box_needed(draft) is False
     draft["artifacts"]["r"]["final_output"] = "false"
     assert report_box_needed(draft) is True
+
+
+# -- the reviewed shapes draw as develop does -----------------------------------
+#
+# In each of these a way to the end skips the agent's own steps, so the diagram
+# must be exactly what develop drew. tests/fixtures/bpmn_develop/ holds each
+# blueprint (<name>.json) and develop's drawing of it (<name>.bpmn), made at the
+# commit in tests/fixtures/bpmn_develop/DEVELOP_COMMIT by
+#     python tests/fixtures/bpmn_develop/regenerate.py
+# (from implementation_layer/solution_wizard). After a deliberate change to the
+# layout, regenerate them and review the change in the diagrams.
+
+
+def _shape_auto_approval_to_end():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _report("make_doc", ["review"]),
+        _send("deliver", ["make_doc"]),
+    ]
+    decision = _decision("auto", "extract", ("small", "end"), ("big", "review"))
+    return _blueprint_dict(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
+
+
+def _shape_sender_with_generated_report():
+    return _blueprint_dict([UPLOAD, EXTRACT, _send("send_erp", ["extract"])], BASE_ARTS)
+
+
+def _shape_two_senders_on_two_branches():
+    steps = [UPLOAD, EXTRACT, _send("send_small", ["extract"]), _send("send_large", ["extract"])]
+    decision = _decision("size", "extract", ("small", "send_small"), ("large", "send_large"))
+    return _blueprint_dict(steps, BASE_ARTS, decisions=[decision])
+
+
+def _shape_sender_before_review():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _send("send_erp", ["extract"]),
+        _step("review", "human_review", deps=["send_erp"], inputs=["record"]),
+    ]
+    return _blueprint_dict(steps, BASE_ARTS)
+
+
+def _shape_sender_on_one_way_of_a_fork():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _report("make_doc", ["upload"]),
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _send("deliver", ["review"]),
+        _step("screen", deps=["upload"]),
+        _step("flag", deps=["screen"]),
+    ]
+    decision = _decision("s", "screen", ("clean", "end"), ("odd", "flag"))
+    return _blueprint_dict(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
+
+
+def _shape_targets_that_could_collide():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _send("deliver", ["review"], target="erp"),
+    ]
+    decision = _decision("auto", "extract", ("small", "end"), ("big", "review"))
+    return _blueprint_dict(steps, BASE_ARTS, targets=("erp", "erp_auto"), decisions=[decision])
+
+
+def _shape_report_on_one_branch_only():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("route", deps=["extract"]),
+        _step("manager", "user_task", deps=["route"]),
+        _report("make_document", ["manager"]),
+        _step("archive", deps=["route"]),
+    ]
+    decision = _decision("big", "route", ("yes", "manager"), ("no", "archive"))
+    return _blueprint_dict(
+        steps, {**BASE_ARTS, **_report_art("make_document")}, targets=(), decisions=[decision]
+    )
+
+
+def _shape_two_decisions_and_a_join():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _step("verify", deps=["extract"]),
+        _step("check", deps=["review"]),
+        _report("make_doc", ["check", "verify"]),
+        _send("deliver", ["make_doc"]),
+    ]
+    decisions = [
+        _decision("auto", "extract", ("small", "end"), ("big", "review")),
+        _decision("again", "make_doc", ("fine", "deliver"), ("redo", "check")),
+    ]
+    return _blueprint_dict(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=decisions)
+
+
+DEVELOP_SHAPES = {
+    "auto_approval_to_end": _shape_auto_approval_to_end,
+    "sender_with_generated_report": _shape_sender_with_generated_report,
+    "two_senders_on_two_branches": _shape_two_senders_on_two_branches,
+    "sender_before_review": _shape_sender_before_review,
+    "sender_on_one_way_of_a_fork": _shape_sender_on_one_way_of_a_fork,
+    "targets_that_could_collide": _shape_targets_that_could_collide,
+    "report_on_one_branch_only": _shape_report_on_one_branch_only,
+    "two_decisions_and_a_join": _shape_two_decisions_and_a_join,
+}
+
+FIXTURES = Path(__file__).parent / "fixtures" / "bpmn_develop"
+
+
+@pytest.mark.parametrize("name", sorted(DEVELOP_SHAPES))
+def test_a_shape_whose_ways_skip_the_own_steps_draws_as_develop_did(name):
+    blueprint = json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+    # The fixture is the blueprint the shape builds, so a change to the shape
+    # is not silently tested against an old drawing.
+    assert blueprint == json.loads(json.dumps(DEVELOP_SHAPES[name]()))
+    expected = (FIXTURES / f"{name}.bpmn").read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    assert generate_bpmn(Blueprint.model_validate(blueprint)) == expected
