@@ -399,7 +399,10 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   once. The step that writes the report outputs an artifact of type "pdf" with
   source "generated", final_output true and produced_by that step; the step that sends to an
   integration target has parameters.integration_target set to the target's
-  exact name in technical_spec.integration_targets.
+  exact name in technical_spec.integration_targets. Your steps replace the
+  generated tasks only when every way to the end passes them: a decision
+  branch that is done should then target your report step (or your first
+  send step), not "end", or the generated tasks stay beside yours.
 - THE USER EDITS THE SOLUTION TOO. The user can change the solution in the
   workspace; the server writes those changes into use_case.blueprint.json and
   tells you which. Read the file again before you edit it, and never undo a

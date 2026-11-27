@@ -318,7 +318,9 @@ def integration_marker(step: Any) -> Optional[str]:
 
 
 def report_box_needed(blueprint: Any) -> bool:
-    """The diagram adds a "Generate PDF report" task."""
+    """A report is asked for and no step is marked as writing it: the diagram
+    adds a "Generate PDF report" task. (With a marked step it may still add
+    one, when a way to the end skips that step.)"""
     bp = _as_dict(blueprint)
     steps = _as_dict(bp.get("workflow")).get("steps")
     return (
@@ -329,8 +331,10 @@ def report_box_needed(blueprint: Any) -> bool:
 
 
 def submit_box_targets(blueprint: Any) -> List[str]:
-    """The integration targets the diagram adds a "Submit to …" task for: those
-    no step names exactly in ``parameters.integration_target``."""
+    """The integration targets no step names exactly in
+    ``parameters.integration_target``: the diagram adds a "Submit to …" task for
+    each. (For a marked target it may still add one, when a way to the end
+    skips the marked steps or a generated report would follow them.)"""
     bp = _as_dict(blueprint)
     marked = {integration_marker(s) for s in _as_list(_as_dict(bp.get("workflow")).get("steps"))}
     targets = _as_list(_as_dict(bp.get("technical_spec")).get("integration_targets"))
@@ -445,8 +449,8 @@ class _BpmnBuilder:
         self._consumed_exception_ids: set = set()
         # integration target -> the id of the "Submit to …" task drawn for it
         self._send_task_of: Dict[str, str] = {}
-        # decision branches to "end": (decision id, its gateway, the flow)
-        self._end_branches: List[Tuple[str, str, _Flow]] = []
+        # set when the "Generate PDF report" task is added
+        self._generated_pdf = False
 
     # -- id allocators ----------------------------------------------------
 
@@ -1031,9 +1035,13 @@ class _BpmnBuilder:
             self.data_stores.append((ds_id, ds_label, target))
             self._map(ds_id, "data_store", f"technical_spec.integration_targets[{idx}]")
 
-            if own:
-                # The agent's own step sends to this target: it writes the data
-                # store, and no "Submit to …" task is added beside it.
+            own_nodes = [n for n in map(self._lookup_node_for_step, own) if n]
+            if own_nodes and not self._generated_pdf and self._passes_every_way(own_nodes):
+                # The agent's own steps send to this target on every way to the
+                # success end, and no generated report would follow them: they
+                # write the data store, and no "Submit to …" task is added.
+                # Otherwise the task is added as before, at the end, after the
+                # generated report.
                 for sid in own:
                     node = self._lookup_node_for_step(sid)
                     if node:
@@ -1084,22 +1092,24 @@ class _BpmnBuilder:
         spliced *after* the PDF -- the natural "generate the report, then submit
         it" order.
 
-        Nothing is added when the workflow already has a step that writes the
-        final report (`_own_report_steps`: a generated pdf/report artifact with
-        final_output it produces), or, as before, a step whose id or component
-        names a PDF/report generator (case-insensitive), so intentionally
-        modelled blueprints are never double-counted. What the agent wrote is
-        trusted: a report step on one of a decision's own branches only is not
-        copied onto the others (a branch to "end" is, `_route_end_branches`).
-        With the agent's own send step and no report step of its own, the
-        generated report still goes here, after approval, so it is drawn after
-        that send step.
+        Nothing is added when every way to the success end passes a step that
+        writes the final report itself (`_own_report_steps`: a generated
+        pdf/report artifact with final_output that it produces), or, as before,
+        when a step's id or component names a PDF/report generator
+        (case-insensitive). When a way skips the agent's report steps (a
+        decision's branch to "end" past them, say), the task is added as
+        before, at the end, so every successful path still renders a report;
+        the path through the agent's step then shows two. Nothing is rewired.
         """
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
         if not wants_report(spec.get("output_types")):
             return
-        if self._own_report_steps() or named_report_step(self._step_dicts()):
+        if named_report_step(self._step_dicts()):
             return
+        own = [n for n in map(self._lookup_node_for_step, self._own_report_steps()) if n]
+        if self._passes_every_way(own):
+            return
+        self._generated_pdf = True
 
         pdf_id = self._free_id("Activity_generate_pdf")
         pdf_node = _Node(
@@ -1172,13 +1182,10 @@ class _BpmnBuilder:
                 if moved is not None:
                     outgoing.remove(moved)
                     moved.name = br.condition or moved.name
-                    flow = moved
                 else:
-                    flow = self._add_flow(xg, tgt, name=br.condition)
-                if tgt == "EndEvent_success":
-                    self._end_branches.append((dp.id, xg, flow))
+                    self._add_flow(xg, tgt, name=br.condition)
 
-    # -- decision branches to "end" and the agent's own finishing steps ----
+    # -- the agent's own report and send steps: on every way to the end? --
 
     def _forward_graph(self) -> Tuple[Dict[str, List[str]], List[str]]:
         """The drawn flows without the ways back, and the nodes in their order.
@@ -1212,147 +1219,22 @@ class _BpmnBuilder:
                 stack.append((nxt, iter(succ.get(nxt, []))))
         return fwd, post[::-1]
 
-    @staticmethod
-    def _reach(fwd: Dict[str, List[str]], src: str, removed: Optional[str] = None) -> set:
-        """The nodes reached from ``src`` without passing ``removed``."""
-        seen, todo = set(), [src]
+    def _passes_every_way(self, nodes: List[str]) -> bool:
+        """Every way from the start to the success end passes one of ``nodes``
+        (rework ways left out): the success end cannot be reached with them
+        taken out. A way that skips them all, such as a decision's branch to
+        "end" past them, or another branch of a fork, makes this false."""
+        if not nodes:
+            return False
+        fwd, _ = self._forward_graph()
+        seen, todo = set(), ["StartEvent_1"]
         while todo:
             n = todo.pop()
-            if n in seen or n == removed:
+            if n in seen or n in nodes:
                 continue
             seen.add(n)
             todo.extend(fwd.get(n, []))
-        return seen
-
-    def _runs_anyway(self, fwd: Dict[str, List[str]], order: List[str]) -> set:
-        """The nodes every successful run passes, whatever is chosen on the way.
-
-        Walked in the drawn order from the start: a choice (an exclusive gateway
-        with more than one way on that does not just end the case elsewhere)
-        stops it, and a parallel join is passed only when all its ways are.
-        A step beside a decision on a fork, with no choice before it, is one.
-        """
-        preds: Dict[str, List[str]] = {}
-        for src, outs in fwd.items():
-            for t in outs:
-                preds.setdefault(t, []).append(src)
-
-        def chooses(n: str) -> bool:
-            node = self.nodes.get(n)
-            if node is None or node.tag != "bpmn:exclusiveGateway":
-                return False
-            live = {
-                t
-                for t in fwd.get(n, [])
-                if not (
-                    t != "EndEvent_success"
-                    and self.nodes.get(t) is not None
-                    and self.nodes[t].tag == "bpmn:endEvent"
-                )
-            }
-            return len(live) > 1
-
-        anyway: set = set()
-        for n in order:
-            if n == "StartEvent_1":
-                anyway.add(n)
-                continue
-            ps = preds.get(n, [])
-            given = [p for p in ps if p in anyway and not chooses(p)]
-            node = self.nodes.get(n)
-            if node is not None and node.tag == "bpmn:parallelGateway" and len(set(ps)) > 1:
-                if len(given) == len(ps):
-                    anyway.add(n)
-            elif given:
-                anyway.add(n)
-        return anyway
-
-    def _route_end_branches(self) -> None:
-        """A decision's branch to "end" means done, through the report and the
-        delivery. With the agent's own report or send steps there is no
-        generated box at the end that it would pass, so a branch to "end" whose
-        run would not pass them gets generated boxes of its own: the report
-        unless one of the agent's report steps comes before the decision on
-        every way to it, or runs whatever is chosen (`_runs_anyway`); and a
-        submission per target on the same terms. The branch still ends: it never
-        enters the agent's steps, which could lead it through a review or a
-        second submission. So every successful run passes the report and each
-        submission once, at the cost of a generated box beside the agent's own
-        on the decision's other branches.
-        """
-        reports = [n for n in map(self._lookup_node_for_step, self._own_report_steps()) if n]
-        spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
-        sends: Dict[str, List[str]] = {}
-        for t in _as_list(spec.get("integration_targets")):
-            nodes = [n for n in map(self._lookup_node_for_step, self._own_submission_steps(str(t)))]
-            if any(nodes):
-                sends[str(t)] = [n for n in nodes if n]
-        if not reports and not sends:
-            return
-        fwd, order = self._forward_graph()
-        anyway = self._runs_anyway(fwd, order)
-        # A decision with several branches to "end": the first gets the boxes,
-        # the others lead into them, so the case is not submitted twice.
-        first_box: Dict[str, str] = {}
-        for dp_id, xg, flow in self._end_branches:
-            if flow not in self.flows or flow.src != xg or flow.tgt != "EndEvent_success":
-                continue
-            if xg not in order:
-                continue
-
-            def passed(nodes: List[str], xg: str = xg) -> bool:
-                return any(
-                    n in anyway or xg not in self._reach(fwd, "StartEvent_1", removed=n)
-                    for n in nodes
-                )
-
-            need_report = bool(reports) and not passed(reports)
-            need_sends = [t for t, nodes in sends.items() if not passed(nodes)]
-            if xg in first_box:
-                flow.tgt = first_box[xg]
-                continue
-            start = self._splice_branch_boxes(flow, dp_id, need_report, need_sends)
-            if start is not None:
-                first_box[xg] = start
-
-    def _splice_branch_boxes(
-        self, flow: _Flow, dp_id: str, report: bool, targets: List[str]
-    ) -> Optional[str]:
-        """The generated report and submission boxes on one decision branch;
-        returns the first box, or None when none is needed."""
-        chain: List[str] = []
-        if report:
-            nid = f"Activity_generate_pdf_{_safe(dp_id)}"
-            self.nodes[nid] = _Node(
-                nid,
-                "bpmn:serviceTask",
-                "Generate PDF report",
-                self._lane_for_category("ai"),
-                "task",
-            )
-            self._map(nid, "pdf_generation", f"derived:pdf_output:branch:{dp_id}")
-            chain.append(nid)
-        for t in targets:
-            nid = f"Activity_submit_{_safe(t)}_{_safe(dp_id)}"
-            node = _Node(
-                nid,
-                "bpmn:sendTask",
-                f"Submit to {_humanize_token(t)}",
-                self._lane_for_category("ai"),
-                "task",
-            )
-            node.data_out.append((self._next_assoc_id(), f"DataStore_{_safe(t)}"))
-            self.nodes[nid] = node
-            self._map(nid, "send_task", f"derived:submit:{t}:branch:{dp_id}")
-            chain.append(nid)
-        if not chain:
-            return None
-        end = flow.tgt
-        flow.tgt = chain[0]
-        for a, b in zip(chain, chain[1:]):
-            self._add_flow(a, b)
-        self._add_flow(chain[-1], end)
-        return chain[0]
+        return "EndEvent_success" not in seen
 
     def _new_decision_gateway(self, i: int, dp, beside: str) -> str:
         """The exclusive gateway a decision point is drawn as, in the lane of ``beside``."""
@@ -1709,7 +1591,6 @@ class _BpmnBuilder:
         self._enrich_decision_points()
         self._enrich_exceptions()
         self._settle_joins()
-        self._route_end_branches()
         # PDF generation is placed on the approved path *before* integration so
         # the order reads "generate the report -> submit it", and so a human
         # review approves the output before the PDF is rendered.
