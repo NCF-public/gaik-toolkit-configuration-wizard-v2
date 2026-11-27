@@ -11,9 +11,6 @@ on:
       - "implementation_layer/unit_tests/test_sandbox_job_manifest.py"
       - "implementation_layer/unit_tests/test_deploy_instances.py"
       - "implementation_layer/unit_tests/test_sandbox_network_policy.py"
-      # test.yml does not run on develop here, and the wizard_api job checks the
-      # format of every Python file a delivery takes to upstream.
-      - "implementation_layer/**/*.py"
       - ".github/workflows/solution-wizard-v2.yml"
       - ".github/security/**"
       - ".github/scripts/**"
@@ -30,7 +27,6 @@ on:
       - "implementation_layer/unit_tests/test_sandbox_job_manifest.py"
       - "implementation_layer/unit_tests/test_deploy_instances.py"
       - "implementation_layer/unit_tests/test_sandbox_network_policy.py"
-      - "implementation_layer/**/*.py"
       - ".github/workflows/solution-wizard-v2.yml"
       - ".github/security/**"
       - ".github/scripts/**"
@@ -68,12 +64,10 @@ jobs:
       - name: Install wizard_api
         working-directory: implementation_layer/wizard_api
         run: pip install -e ".[dev]"
-      - name: Ruff (wizard_api; format as upstream's test.yml checks it)
-        # Upstream's test.yml checks the format of all of implementation_layer/,
-        # so a delivery with an unformatted file fails there.
+      - name: Ruff (wizard_api)
         run: |
           pip install ruff==0.14.10
-          ruff format --check implementation_layer/
+          ruff format --check implementation_layer/wizard_api/
           ruff check implementation_layer/wizard_api/
       - name: Pytest wizard_api
         working-directory: implementation_layer/wizard_api

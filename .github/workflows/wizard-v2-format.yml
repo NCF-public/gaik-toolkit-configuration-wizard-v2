@@ -1,0 +1,37 @@
+name: Wizard V2 format
+
+# Upstream's test.yml checks the format of all of implementation_layer/, but it does not
+# run on this fork's branches, so a delivery with an unformatted file fails there. This
+# runs the same check on develop and the release branch. Upstream has neither branch, so
+# after a delivery the workflow does nothing there.
+on:
+  push:
+    branches: [develop, release/wizard-v2]
+    paths:
+      - "implementation_layer/**"
+      - "pyproject.toml"
+      - ".github/workflows/wizard-v2-format.yml"
+  pull_request:
+    branches: [develop, release/wizard-v2]
+    paths:
+      - "implementation_layer/**"
+      - "pyproject.toml"
+      - ".github/workflows/wizard-v2-format.yml"
+
+permissions: {}
+
+jobs:
+  ruff-format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+      - name: Ruff format check (as upstream's test.yml)
+        run: uvx ruff@0.14.10 format --check implementation_layer/
