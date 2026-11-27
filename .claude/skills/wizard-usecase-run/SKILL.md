@@ -31,12 +31,15 @@ Python only, and a running API with a working agent (`implementation_layer/WIZAR
      `WIZARD_MAX_SESSIONS_PER_USER` says otherwise, and at the limit the next case fails at
      its start with `429 session_limit`. For more than a few cases on the local stack, start
      it with the variable at `0`; elsewhere delete the earlier runs' sessions
-     (`DELETE <base>/sessions/<id>` with the `X-Wizard-User-Id` header; `summary.md` names
-     each session) or run as another user with `--user` (default `dev@gaik.local`).
-   - A user's spend is capped as well (`WIZARD_USER_MAX_COST_USD`, $10.80 unless set, over
-     all their sessions; deleting one gives nothing back), and at the cap every message is
-     refused with `402 usage_cap`. A set run on the deployment's model can reach it: run as
-     another `--user`, or start the local stack with the variable at `0` (no cap).
+     (`DELETE <base>/sessions/<id>` with the run's user in `X-Wizard-User-Id`, and
+     `X-Wizard-Service-Token` where the API has a token; `summary.md` names each session)
+     or run as another user with `--user` (default `WIZARD_USER_ID`, else `dev@gaik.local`).
+   - Spend is capped too, and at a cap every message is refused with `402 usage_cap`, whose
+     `scope` says which: a user's over all their sessions (`WIZARD_USER_MAX_COST_USD`, $10.80
+     unless set; deleting a session gives nothing back) and one session's
+     (`WIZARD_SESSION_MAX_COST_USD`, $5.40). A set run on the deployment's model can reach
+     them: run as another `--user`, or start the local stack with the variables at `0` (no
+     cap).
    - `--run` uploads the case's `inputs` and starts the PoC test run at the PoC step. Where
      the API has a sandbox it is needed: Gate 3 is refused there without a successful run.
      Without a sandbox the check is reported as skipped and Gate 3 is approved without a run.
@@ -162,7 +165,7 @@ and without `--run` no package was executed.
 
 | Scenario | What the walk does | Passes when |
 | --- | --- | --- |
-| `reload_mid_reply` | Joins the running reply from a second connection and sends a second message meanwhile | The reply arrives on the second connection and the second message is refused |
+| `reload_mid_reply` | Joins the running reply from a second connection and sends a second message meanwhile | The reply arrives on the second connection and the second message is refused with 409 (`info` when a limit refused it first with 429) |
 | `language_offer` | Writes in the other language after Gate 1 | The reply carries the offer to switch the interface language |
 | `reopen_in_panel` | Reopens Gate 1 after Gate 2, as the panel does | Every gate is pending again and the session is back at Gate 1 |
 | `change_in_chat` | Asks for the case's `change` after Gate 2 | An approved gate was reopened (skipped if the case has no `change`) |
@@ -211,7 +214,8 @@ output's fields, for one) and the results can be compared:
   goes to the answer listed first. A question nothing hits gets the generic line.
 - An answer is sent once, unless it is `repeatable`; one in a message the API refused is still to give. The answers no question drew out go in
   one message that starts "Also note:" when the wizard presents the specification, before
-  Gate 1 is approved, so the wizard hears all of them in every run.
+  Gate 1 is approved, so the wizard hears all of them in every run. A note the API refuses
+  three times is left out, and `scripted_answers` counts what was not sent.
 - The log says which went where (`ANSWERS round 2: SA03 <- "the question" [the keywords]`,
   `ANSWERS before Gate 1 (also note): ...`), and the summary counts them (`scripted_answers`).
   A wrong match is a keyword to change, not a finding about the wizard.

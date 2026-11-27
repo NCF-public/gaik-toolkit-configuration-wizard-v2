@@ -180,7 +180,9 @@ class ScriptedAnswers(unittest.TestCase):
             message, _ = walk.reply_to(["What is the schema?"])
             walk.say(message)
             self.assertEqual((walk.sent, walk.answer_log), (set(), []))
-            self.assertFalse(walk.send_unsent_answers())  # refused: on to the gate
+            # A refused note is tried again, and after the last try the walk goes on.
+            tries = [walk.send_unsent_answers() for _ in range(run_usecases.NOTE_TRIES)]
+            self.assertEqual(tries, [True] * (run_usecases.NOTE_TRIES - 1) + [False])
             api.refuse = False
             self.assertTrue(walk.send_unsent_answers())
             self.assertIn("- Use the Ticket schema.", api.said[-1])
@@ -421,6 +423,15 @@ class WalkEdges(unittest.TestCase):
             walk.replies += 1
             self.assertTrue(walk.another_run_due())
             walk.log_file.close()
+
+    def test_a_run_stream_that_ends_before_the_run_is_not_done(self):
+        interrupted = [
+            b'data: {"log": "done"}\n',
+            b'data: {"error": true, "code": "run_stream_interrupted"}\n',
+        ]
+        self.assertFalse(run_usecases.run_stream_done(interrupted))
+        finished = [b'data: {"log": "x"}\n', b'data: {"done": true, "phase": "succeeded"}\n']
+        self.assertTrue(run_usecases.run_stream_done(finished))
 
     def test_an_unreadable_session_does_not_pass_end_session(self):
         class GoneApi:
