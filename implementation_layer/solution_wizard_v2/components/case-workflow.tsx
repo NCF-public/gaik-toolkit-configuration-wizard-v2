@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CaseStrings } from "@/lib/case-strings";
 import {
   type Case,
@@ -22,6 +22,7 @@ import {
   isList,
   isStructured,
   isTable,
+  isTypedInput,
   parseInput,
   problemCount,
   reusablePocInputsForTask,
@@ -32,6 +33,7 @@ import {
   tableColumns,
   toCsv,
   toMarkdown,
+  typedInputFileName,
   uncertainField,
 } from "@/lib/case-process";
 import { AI_FRONT_MATTER, AI_GENERATOR, AI_RECORD_MARK } from "@/lib/ai-marking";
@@ -1001,9 +1003,11 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
     return { okCount, problem };
   }
 
-  async function upload(files: File[]) {
+  /** Adds the files to the case; true when every one was taken. */
+  async function upload(files: File[]): Promise<boolean> {
     setUploading(true);
     setUploadProblem(null);
+    let taken = false;
     try {
       if (p.onFirstInput) {
         const problem = await p.onFirstInput(
@@ -1011,10 +1015,11 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           note ? { taskId: p.task.id, note } : undefined,
         );
         if (problem) setUploadProblem(problem);
-        return;
+        return !problem;
       }
       const { problem } = await uploadToCase(base, files);
       if (problem) setUploadProblem(problem);
+      taken = !problem;
     } catch {
       // The request got no answer (no network): the buttons stayed disabled
       // under "Ladataan…" until the page was reloaded.
@@ -1023,6 +1028,26 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
       setUploading(false);
     }
     await p.reload();
+    return taken;
+  }
+
+  // A question or a message is typed, not uploaded (#121). It goes to the case
+  // as a text file, which is how the run reads it, so it is offered where a
+  // text file is taken; the upload stays beside it.
+  const typedFor = p.task.outputs.find(isTypedInput) ?? null;
+  const typed =
+    typedFor !== null && (p.accepted.length === 0 || p.accepted.some((a) => a.extensions.includes(".txt")));
+  const [typedText, setTypedText] = useState("");
+  const typedId = useId();
+
+  async function addTyped() {
+    const text = typedText.trim();
+    if (!text) return;
+    const name = typedInputFileName(
+      typedFor,
+      c.inputs.map((f) => f.name),
+    );
+    if (await upload([new File([`${text}\n`], name, { type: "text/plain" })])) setTypedText("");
   }
 
   async function reusePocFile(filename: string) {
@@ -1155,6 +1180,37 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+      {/* A question is written here; it is added to the case as a text file
+          and listed in the box below with the step's other files. */}
+      {typed && (
+        <div className="flex flex-col gap-2" data-testid="case-typed">
+          <label htmlFor={typedId} className="text-sm font-medium text-text">
+            {humanize(typedFor ?? "")}
+          </label>
+          <textarea
+            id={typedId}
+            className="input-field min-h-20"
+            value={typedText}
+            onChange={(e) => setTypedText(e.target.value)}
+            placeholder={s.typedPlaceholder}
+            disabled={blocked}
+            data-testid="case-typed-text"
+          />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={blocked || !typedText.trim()}
+              onClick={() => void addTyped()}
+              data-testid="case-typed-add"
+            >
+              <Icon name={uploading ? "loaderCircle" : "plus"} size={16} className={uploading ? "animate-spin" : ""} />
+              {s.typedAdd}
+            </button>
+            <span className="text-xs text-text-muted">{s.typedHint}</span>
+          </div>
         </div>
       )}
       {/* One box for the step's input: the files added so far as its rows,

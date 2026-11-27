@@ -363,6 +363,39 @@ export const isAudioInput = (name: string | null) => {
   return /(?<!\p{L})(?:audio|voice|recording|ääni|puhe(?!lin|lu|en))/iu.test(words);
 };
 
+/**
+ * An input a person writes rather than uploads: a question, a query, a message
+ * (#121). A blueprint has no source for typed text, so the wizard's RAG example
+ * makes the user's question an upload, and the case page offered only a file
+ * box for it: a tester wrote the question into a .txt to attach it. Told by its
+ * name, as a recording is above; a voice message is a recording.
+ */
+export const isTypedInput = (name: string | null) => {
+  if (isAudioInput(name)) return false;
+  const words = (name ?? "").replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2");
+  return /(?<!\p{L})(?:question|quer(?:y|ies)|prompt|message|kysymy|kysely|viesti)/iu.test(words);
+};
+
+/**
+ * The file a typed input goes to the case as: the input's own name as a .txt
+ * (a run reads a question from a text file in its input folder), one the case
+ * does not have yet, since the api refuses a name it already holds.
+ */
+export function typedInputFileName(name: string | null, taken: string[]): string {
+  const stem =
+    (name ?? "")
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60) || "text";
+  const used = new Set(taken.map((t) => t.toLowerCase()));
+  let candidate = `${stem}.txt`;
+  for (let n = 2; used.has(candidate); n += 1) candidate = `${stem}_${n}.txt`;
+  return candidate;
+}
+
 const AUDIO_FILE_EXT = /\.(wav|mp3|m4a|ogg|webm)$/i;
 
 /**

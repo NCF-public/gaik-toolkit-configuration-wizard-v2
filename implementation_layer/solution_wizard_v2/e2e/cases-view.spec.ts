@@ -723,3 +723,76 @@ test.describe("cases view: direct input on first arrival (#253)", () => {
     expect(fake.created).toBe(1);
   });
 });
+
+// Questions over a product guide (#121): the question is a user task's output,
+// and the run reads it from a text file of the case.
+const QA_MODEL = {
+  title: "Ohjekirjan kysymykset",
+  spec: { schema_name: "Answer", fields: ["answer", "citations"], required_fields: ["answer"] },
+  process: {
+    lanes: [
+      { id: "L_user", name: "Käyttäjä", human: true },
+      { id: "L_ai", name: "GAIK AI", human: false },
+    ],
+    nodes: [
+      { id: "S", kind: "startEvent", name: "", lane: "L_user", inputs: [], outputs: [] },
+      { id: "T_ask", kind: "userTask", name: "Kysy kysymys", lane: "L_user", inputs: [], outputs: ["User Question"] },
+      { id: "T_answer", kind: "serviceTask", name: "Vastaa", lane: "L_ai", inputs: [], outputs: [] },
+      { id: "E", kind: "endEvent", name: "", lane: "L_user", inputs: [], outputs: [] },
+    ],
+    flows: [
+      { from: "S", to: "T_ask", name: "" },
+      { from: "T_ask", to: "T_answer", name: "" },
+      { from: "T_answer", to: "E", name: "" },
+    ],
+  },
+  reviewer: null,
+  accepted_inputs: [
+    { kind: "pdf", label: "PDF", extensions: [".pdf"] },
+    { kind: "txt", label: "TXT", extensions: [".txt"] },
+  ],
+  package_ready: true,
+  package_problems: [],
+};
+
+test.describe("cases view: a question is typed, not uploaded (#121)", () => {
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("the typed question goes to the case as a text file of its own and the field empties", async ({ page }) => {
+    const fake = await fakeCases(page, [], QA_MODEL);
+    const sent: { name: string; body: string }[] = [];
+    await page.route(`**${CASES}/${caseId(1)}/inputs`, async (route) => {
+      const body = route.request().postDataBuffer()?.toString("utf8") ?? "";
+      const name = /filename="([^"]+)"/.exec(body)?.[1] ?? "";
+      sent.push({ name, body });
+      const found = fake.cases.find((c) => c.id === caseId(1));
+      (found?.inputs as { name: string; bytes: number; task?: string | null }[]).push({ name, bytes: 32, task: "T_ask" });
+      return route.fulfill({ status: 201, json: { name, bytes: 32, task: "T_ask" } });
+    });
+    await openCases(page);
+
+    const add = page.getByTestId("case-typed-add");
+    await expect(add).toBeDisabled();
+    await expect(page.getByTestId("case-submit")).toBeDisabled();
+    await page.getByLabel("User Question").fill("Miten laite nollataan tehdasasetuksiin?");
+    await add.click();
+
+    await expect(page.getByTestId("case-inputs")).toContainText("user_question.txt");
+    await expect(page.getByLabel("User Question")).toHaveValue("");
+    // The step has its input: the case can be sent without any file of the user's.
+    await expect(page.getByTestId("case-submit")).toBeEnabled();
+    expect(fake.created).toBe(1);
+    expect(sent.map((s) => s.name)).toEqual(["user_question.txt"]);
+    expect(sent[0].body).toContain("Miten laite nollataan tehdasasetuksiin?");
+  });
+
+  test("a step that takes a recording has no text field", async ({ page }) => {
+    await fakeCases(page, [], MODEL);
+    await openCases(page);
+
+    await expect(page.getByTestId("case-upload")).toBeVisible();
+    await expect(page.getByTestId("case-typed")).toHaveCount(0);
+  });
+});
