@@ -156,6 +156,47 @@ test.describe("BPMN layout", () => {
     expect(sent.slice(lastLayout + 1).some((s) => s.kind === "reload")).toBe(true);
   });
 
+  for (const view of [
+    { name: "a phone", width: 390, height: 844, chat: false },
+    { name: "a desktop with the chat open", width: 1440, height: 900, chat: true },
+  ]) {
+    test(`on ${view.name} the view buttons stay inside a narrow canvas, and Reset layout keeps its name`, async ({
+      page,
+    }) => {
+      test.setTimeout(90_000);
+      await page.setViewportSize({ width: view.width, height: view.height });
+      const mapping: Record<string, { kind: string; blueprint_path: string }> = {};
+      STEPS.forEach((id, i) => {
+        mapping[`Activity_${id}`] = { kind: "user_task", blueprint_path: `workflow.steps[${i}]` };
+      });
+      await page.route("**/api/sessions/ses_laskut/bpmn/mapping*", (route) =>
+        route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ mapping, has_draft: true }) }),
+      );
+      await loginAsDev(page);
+      await page.goto("/sessions/ses_laskut");
+      await setChatOpen(page, false);
+      await selectWorkspaceTab(page, "Työnkulku");
+      await openBpmnView(page);
+      await unlockBpmnEditor(page);
+      await expect(page.getByTestId("bpmn-panel")).toHaveAttribute("data-ops", "on", { timeout: 30_000 });
+      if (view.chat) await setChatOpen(page, true);
+
+      const canvas = (await page.locator(".bpmn-editable").boundingBox())!;
+      const reset = page.getByRole("button", { name: "Palauta asettelu" });
+      for (const button of [page.getByTestId("bpmn-show-data"), reset]) {
+        const box = (await button.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(canvas.x);
+        expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width);
+      }
+      await expect(reset).toHaveAttribute("title", "Palauta asettelu");
+      await expect(page.getByRole("button", { name: "Näytä data" })).toHaveAttribute("title", "Näytä data");
+      await reset.click();
+      await expect(page.getByTestId("bpmn-reset-layout-dialog")).toBeVisible();
+      await page.getByRole("button", { name: "Peruuta" }).click();
+      await expect(page.getByTestId("bpmn-reset-layout-dialog")).toBeHidden();
+    });
+  }
+
   // The mapping here names no lane's participant: a step dragged into a lane the mapping
   // names is put in it (set_step_lane, e2e/bpmn-lanes.spec.ts).
   test("a drag into a lane the mapping names no participant for is refused: the shape goes back and nothing is sent", async ({

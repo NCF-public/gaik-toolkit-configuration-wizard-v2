@@ -1046,7 +1046,7 @@ export function BpmnDiagramPanel({
             // Switching redraws the diagram from the server, so not while an edit is on its way or a name is typed.
             <button
               type="button"
-              className="flex h-[34px] items-center gap-1.5 rounded-lg border border-border bg-surface/95 px-2.5 text-xs font-medium text-text-secondary shadow-sm backdrop-blur-sm hover:text-text-strong disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-surface/95 px-2.5 text-xs font-medium text-text-secondary shadow-sm backdrop-blur-sm hover:text-text-strong disabled:cursor-not-allowed disabled:opacity-60"
               aria-pressed={showData}
               onClick={() => {
                 void flushLayout();
@@ -1054,9 +1054,12 @@ export function BpmnDiagramPanel({
               }}
               disabled={working || labelEditing || reloading}
               data-testid="bpmn-show-data"
+              // Icon only on a narrow canvas, like Reset layout beside it.
+              aria-label={t.bpmnShowData}
+              title={t.bpmnShowData}
             >
               <Icon name={showData ? "eye" : "eyeOff"} size={14} />
-              {t.bpmnShowData}
+              <span className="hidden @lg:inline">{t.bpmnShowData}</span>
             </button>
           )}
           {opsOn && hasLayoutTargets(shownXml) && (
@@ -1067,9 +1070,13 @@ export function BpmnDiagramPanel({
               onClick={() => setResetAsked(true)}
               disabled={working || labelEditing || reloading}
               data-testid="bpmn-reset-layout"
+              // On a narrow canvas (a phone, or beside the chat) only the icon shows,
+              // so the buttons beside it fit: the name stays for screen readers and as a tip.
+              aria-label={t.bpmnResetLayout}
+              title={t.bpmnResetLayout}
             >
               <Icon name="rotateCcw" size={14} />
-              {t.bpmnResetLayout}
+              <span className="hidden @lg:inline">{t.bpmnResetLayout}</span>
             </button>
           )}
           <BpmnZoomControls
