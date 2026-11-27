@@ -11,6 +11,9 @@ on:
       - "implementation_layer/unit_tests/test_sandbox_job_manifest.py"
       - "implementation_layer/unit_tests/test_deploy_instances.py"
       - "implementation_layer/unit_tests/test_sandbox_network_policy.py"
+      # test.yml does not run on develop here, and the wizard_api job checks the
+      # format of every Python file a delivery takes to upstream.
+      - "implementation_layer/**/*.py"
       - ".github/workflows/solution-wizard-v2.yml"
       - ".github/security/**"
       - ".github/scripts/**"
@@ -27,6 +30,7 @@ on:
       - "implementation_layer/unit_tests/test_sandbox_job_manifest.py"
       - "implementation_layer/unit_tests/test_deploy_instances.py"
       - "implementation_layer/unit_tests/test_sandbox_network_policy.py"
+      - "implementation_layer/**/*.py"
       - ".github/workflows/solution-wizard-v2.yml"
       - ".github/security/**"
       - ".github/scripts/**"
