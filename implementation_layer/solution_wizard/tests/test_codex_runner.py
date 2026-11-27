@@ -81,18 +81,94 @@ def test_the_wizards_scripts_get_the_key_from_the_narrowed_environment(tmp_path)
     assert policy == {"inherit": "all", "ignore_default_excludes": True}
 
 
-def test_the_users_own_skills_are_turned_off(tmp_path, monkeypatch):
+def test_the_users_own_skills_are_turned_off_at_any_depth(tmp_path, monkeypatch):
     home = tmp_path / "home"
-    for name in ("deploy", "media-gen"):
-        (home / ".agents" / "skills" / name).mkdir(parents=True)
-        (home / ".agents" / "skills" / name / "SKILL.md").write_text("---\nname: x\n---\n")
-    (home / ".agents" / "skills" / "README.md").write_text("not a skill")
+    skills = home / ".agents" / "skills"
+    for rel in ("deploy", "media-gen", "synced/abc123/docx"):
+        (skills / rel).mkdir(parents=True)
+        (skills / rel / "SKILL.md").write_text("---\nname: x\n---\n")
+    (skills / "README.md").write_text("not a skill")
     monkeypatch.setattr(runner.Path, "home", classmethod(lambda cls: home))
-    entries = _config(tmp_path)["skills"]["config"]
-    assert entries == [
-        {"path": (home / ".agents/skills/deploy/SKILL.md").as_posix(), "enabled": False},
-        {"path": (home / ".agents/skills/media-gen/SKILL.md").as_posix(), "enabled": False},
+    paths = [e["path"] for e in _config(tmp_path)["skills"]["config"]]
+    assert {e["enabled"] for e in _config(tmp_path)["skills"]["config"]} == {False}
+    assert paths[:3] == [
+        (skills / "deploy/SKILL.md").as_posix(),
+        (skills / "media-gen/SKILL.md").as_posix(),
+        (skills / "synced/abc123/docx/SKILL.md").as_posix(),
     ]
+
+
+def test_a_linked_folder_that_loops_back_is_walked_once(tmp_path):
+    root = tmp_path / "skills"
+    (root / "a").mkdir(parents=True)
+    (root / "a" / "SKILL.md").write_text("x")
+    try:
+        (root / "a" / "loop").symlink_to(root, target_is_directory=True)
+    except OSError:
+        pytest.skip("this system does not let the test create a folder link")
+    assert runner.skill_files(root) == [root / "a" / "SKILL.md"]
+
+
+def test_repository_skills_from_the_wizard_folder_up_are_included():
+    roots = runner.skill_roots()
+    assert runner.WIZARD_DIR / ".agents" / "skills" in roots
+    repo = next(p for p in (runner.WIZARD_DIR, *runner.WIZARD_DIR.parents) if (p / ".git").exists())
+    assert roots[-1] == repo / ".agents" / "skills"
+
+
+def test_an_endpoint_with_a_user_name_or_password_is_refused():
+    with pytest.raises(ValueError, match="user name or password"):
+        runner.azure_base_url("https://user:secret@example.openai.azure.com/")
+
+
+def test_a_path_outside_the_bmp_stays_valid_toml(tmp_path):
+    config = _config(tmp_path, output_dir=tmp_path / "out-\U0001f600")
+    assert config["sandbox_workspace_write"]["writable_roots"] == [
+        (tmp_path / "out-\U0001f600").as_posix()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(None, "mxc"), ("", "mxc"), (" elevated ", "elevated")]
+)
+def test_the_windows_sandbox_is_mxc_unless_named(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("WIZARD_CODEX_WINDOWS_SANDBOX", raising=False)
+    else:
+        monkeypatch.setenv("WIZARD_CODEX_WINDOWS_SANDBOX", value)
+    assert runner.windows_sandbox() == expected
+
+
+def test_a_cmd_shim_without_its_script_stops_instead_of_cutting_the_message(tmp_path, monkeypatch):
+    shim = tmp_path / "codex.cmd"
+    shim.write_text("@echo off")
+    monkeypatch.setattr(runner.os, "name", "nt")
+    monkeypatch.setattr(runner.shutil, "which", lambda name: str(shim) if name == "codex" else None)
+    with pytest.raises(SystemExit, match="cmd.exe shim"):
+        runner.codex_command()
+
+
+def test_a_cmd_shim_runs_its_script_with_node(tmp_path, monkeypatch):
+    shim = tmp_path / "codex.cmd"
+    shim.write_text("@echo off")
+    script = tmp_path / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    script.parent.mkdir(parents=True)
+    script.write_text("")
+    monkeypatch.setattr(runner.os, "name", "nt")
+    monkeypatch.setattr(
+        runner.shutil, "which", lambda name: {"codex": str(shim), "node": "node.exe"}.get(name)
+    )
+    assert runner.codex_command() == ["node.exe", str(script)]
+
+
+def test_codexs_settings_are_never_written_inside_the_output_folder(tmp_path, monkeypatch):
+    out = tmp_path / "out"
+    out.mkdir()
+    monkeypatch.setenv("LOCALAPPDATA", str(out / "AppData"))
+    env = {"AZURE_ENDPOINT": "https://example.openai.azure.com/", "AZURE_API_KEY": "k"}
+    with pytest.raises(SystemExit, match="inside a folder the agent writes"):
+        runner.prepare(out, env, model="gpt-6.2-sol", effort="low", approval="never")
+    assert not (out / "AppData").exists()
 
 
 def test_the_model_catalog_comes_from_a_signed_in_codex(tmp_path, monkeypatch):
@@ -113,7 +189,13 @@ def test_the_model_catalog_comes_from_a_signed_in_codex(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "cache", [None, "not json", json.dumps({"models": [{"slug": "gpt-6-luna"}]})]
+    "cache",
+    [
+        None,
+        "not json",
+        json.dumps({"models": None}),
+        json.dumps({"models": [{"slug": "gpt-6-luna"}]}),
+    ],
 )
 def test_without_the_models_metadata_there_is_no_catalog(tmp_path, monkeypatch, cache):
     user_codex = tmp_path / "user-codex"

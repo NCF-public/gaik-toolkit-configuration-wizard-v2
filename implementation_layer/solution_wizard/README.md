@@ -121,15 +121,19 @@ python run_wizard_codex.py --output-dir C:/projects/my-use-case
 python run_wizard_codex.py --output-dir C:/projects/my-use-case --resume <session id>
 ```
 
-`../.env` needs `AZURE_API_KEY` and `AZURE_ENDPOINT` (the names gaik and the PoCs read).
-The differences from Option 2:
+It needs the same install as Option 2 (`pip install "gaik[wizard]"`: the runner reuses
+`run_wizard_interactive.py`'s helpers) and `AZURE_API_KEY` and `AZURE_ENDPOINT` in `../.env`
+(the names gaik and the PoCs read). The differences from Option 2:
 
-- Codex's sandbox stands in for `agent_tool_guard.py`: commands write only in the wizard
-  folder and the output folder and reach the network. The wizard folder is not
-  write-protected, so run from a clean checkout and check `git status` afterwards.
+- Codex's sandbox stands in for `agent_tool_guard.py`, and it limits less. Commands write
+  only in the wizard folder, the output folder and the temp folder, but they are not limited
+  to the wizard's scripts, they may read any file you can (`.env` files included), and they
+  run with network access and the `.env` names, the Azure key among them, in their
+  environment. The wizard folder is not write-protected either. Run it on your own machine
+  with your own sample files, from a clean checkout, and check `git status` afterwards.
 - Codex gets a settings folder of its own per output folder, so your `~/.codex` settings,
-  plugins and MCP servers, the repository's `AGENTS.md` and your skills in `~/.agents/skills`
-  are not loaded. Codex's bundled skills stay listed.
+  plugins and MCP servers, the repository's `AGENTS.md` and the skills in `~/.agents/skills`
+  (at any depth) are not loaded. Codex's bundled skills stay listed.
 - The model's Codex metadata (instructions, tools, context window) is copied from
   `~/.codex/models_cache.json`, which a Codex signed in to ChatGPT keeps. Without it, or for a
   deployment named other than the model, Codex warns and runs the model on generic defaults.
