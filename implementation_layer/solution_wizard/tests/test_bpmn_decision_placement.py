@@ -166,6 +166,38 @@ def test_a_decision_steps_ways_take_the_conditions_of_a_decision_point_after_it(
     ]
 
 
+def test_a_decision_point_before_a_decision_step_names_that_steps_ways():
+    """Seen in a live run: the agent wrote one choice twice, as a decision step
+    after check and as a decision point after check, both leading to manager or
+    report. It is drawn as one gateway, the step's, named by the point."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("check", deps=["extract"]),
+        _decision_step("route", ["check"]),
+        _step("manager", "user_task", deps=["route"]),
+        _step("report", deps=["route", "manager"]),
+    ]
+    point = {
+        "id": "needed",
+        "name": "Review needed?",
+        "after": "check",
+        "branches": [
+            {"condition": "big", "target": "manager"},
+            {"condition": "small", "target": "report"},
+        ],
+    }
+    flows, kinds = _flows(_blueprint(steps, decisions=[point]))
+
+    assert "Gateway_decision_needed" not in kinds
+    assert _out_of(flows, "Activity_check") == [("Gateway_route", "")]
+    assert _out_of(flows, "Gateway_route") == [
+        ("Activity_manager", "big"),
+        ("Gateway_join_report", "small"),
+    ]
+    assert _into(flows, "Activity_manager") == [("Gateway_route", "big")]
+    assert _into(flows, "Activity_report") == [("Gateway_join_report", "")]
+
+
 def test_a_decision_step_with_one_successor_and_an_ordinary_fork_are_drawn_as_before():
     steps = [
         dict(_step("extract", inputs=["src"]), outputs=["out"]),

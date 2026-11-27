@@ -987,6 +987,15 @@ class _BpmnBuilder:
             after_node = self._lookup_node_for_step(dp.after)
             if not after_node:
                 continue
+            ahead = [f for f in self.flows if f.src == after_node and not f.is_loop]
+            if (
+                dp.after not in self._approval_of
+                and len(ahead) == 1
+                and self.mapping.get(ahead[0].tgt, {}).get("kind") == "decision"
+            ):
+                # The step's only way on is a step of type "decision": the same
+                # choice written twice (seen in a live run). Its gateway decides.
+                after_node = ahead[0].tgt
             if self.nodes[after_node].tag == "bpmn:exclusiveGateway":
                 # After a step of type "decision": the step's own gateway decides,
                 # and the decision point's branches name its ways. The gateway
