@@ -180,13 +180,23 @@ class ScriptedAnswers(unittest.TestCase):
             message, _ = walk.reply_to(["What is the schema?"])
             walk.say(message)
             self.assertEqual((walk.sent, walk.answer_log), (set(), []))
-            # A refused note is tried again, and after the last try the walk goes on.
-            tries = [walk.send_unsent_answers() for _ in range(run_usecases.NOTE_TRIES)]
-            self.assertEqual(tries, [True] * (run_usecases.NOTE_TRIES - 1) + [False])
             api.refuse = False
             self.assertTrue(walk.send_unsent_answers())
             self.assertIn("- Use the Ticket schema.", api.said[-1])
             self.assertEqual(walk.sent, {0, 1, 2, 3})
+            walk.log_file.close()
+
+    def test_a_note_refused_on_every_try_is_left_out(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api = FakeApi(refuse=True)
+            walk = self.walk(folder, ANSWERS, api)
+            # Tried again after a refusal; after the last try the walk goes on without it,
+            # also when it comes back to Gate 1 later.
+            tries = [walk.send_unsent_answers() for _ in range(run_usecases.NOTE_TRIES + 1)]
+            self.assertEqual(tries, [True] * (run_usecases.NOTE_TRIES - 1) + [False, False])
+            api.refuse = False
+            self.assertFalse(walk.send_unsent_answers())
+            self.assertEqual((api.said, walk.sent), ([], set()))
             walk.log_file.close()
 
     def test_a_case_without_answers_says_the_generic_line(self):
@@ -430,6 +440,8 @@ class WalkEdges(unittest.TestCase):
             b'data: {"error": true, "code": "run_stream_interrupted"}\n',
         ]
         self.assertFalse(run_usecases.run_stream_done(interrupted))
+        unsettled = [b'data: {"done": true, "phase": "running"}\n']
+        self.assertFalse(run_usecases.run_stream_done(unsettled))
         finished = [b'data: {"log": "x"}\n', b'data: {"done": true, "phase": "succeeded"}\n']
         self.assertTrue(run_usecases.run_stream_done(finished))
 

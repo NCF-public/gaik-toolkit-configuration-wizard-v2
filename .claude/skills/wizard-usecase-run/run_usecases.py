@@ -74,6 +74,7 @@ RUN_FAILED = {
 MAX_RUNS = 3  # test runs a case: the first, and two more after the wizard has mended the package
 MAX_MESSAGE = 15_000  # characters in one chat message; the API takes 20 000 by default
 NOTE_TRIES = 3  # refused tries of the note before Gate 1, then the walk goes on without it
+FINISHED_PHASES = {"succeeded", "failed", "timeout"}  # a sandbox run's phases once it has ended
 WORD = re.compile(r"[^\W_]+")
 # Words that say nothing about a question's topic.
 STOP = frozenset(
@@ -465,11 +466,13 @@ def package_id(files: dict) -> str | None:
 
 
 def run_stream_done(response) -> bool:
-    """Read a run's stream to its end: whether it ended with the run (a ``done`` frame).
+    """Read a run's stream to its end: whether it ended with the run.
 
-    The API ends the stream with an error frame and no ``done`` while the run goes on
-    when it loses the run's log (``run_stream_interrupted``); the run is not recorded
-    until a stream of it reaches its end.
+    That is a ``done`` frame with a finished phase. The API ends the stream with an
+    error frame while the run goes on when it loses the run's log
+    (``run_stream_interrupted``), and with ``done`` in phase ``running`` when the Job
+    has not settled 30 s after its log ended; it records the run only at the end of a
+    stream that sees it finished.
     """
     done = False
     for raw in response:
@@ -480,7 +483,8 @@ def run_stream_done(response) -> bool:
             event = json.loads(line[6:])
         except json.JSONDecodeError:
             continue
-        done = done or (isinstance(event, dict) and event.get("done") is True)
+        if isinstance(event, dict) and event.get("done") is True:
+            done = event.get("phase", "succeeded") in FINISHED_PHASES
     return done
 
 
@@ -677,7 +681,7 @@ class Walk:
         gate without them rather than sending the same note on every pass.
         """
         left = [i for i in range(len(self.answers)) if i not in self.sent]
-        if not left:
+        if not left or self.note_refusals >= NOTE_TRIES:
             return False
         head = ALSO_NOTE[self.locale]
         labels = [answer_label(self.answers[i], i) for i in left]
@@ -1214,7 +1218,7 @@ class Walk:
             self.check(
                 "poc_runs",
                 "info",
-                f"{len(self.runs)} started (at most {MAX_RUNS}): "
+                f"{len(self.runs)} tried (at most {MAX_RUNS}): "
                 + ", ".join(
                     f"run {r['number']} did not start"
                     if r.get("started") is False
