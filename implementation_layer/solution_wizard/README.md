@@ -108,6 +108,34 @@ starts with a provider prefix such as `ANTHROPIC_`, `AZURE_` or `OPENAI_`); the
 runner narrows its own environment to these before the CLI starts. Hand on another
 variable with `--pass-env NAME`.
 
+### Option 2b — Experimental: the same session on OpenAI Codex (Azure OpenAI)
+
+`run_wizard_codex.py` starts the Codex CLI with the same skill and first message as Option 2,
+against a model deployed in your Azure OpenAI resource (`gpt-6.2-sol` unless `--model` names
+another deployment). It is for comparing the two agents; the web app's wizard runs Claude.
+
+```bash
+npm install -g @openai/codex        # 0.166 or later
+python run_wizard_codex.py --preflight
+python run_wizard_codex.py --output-dir C:/projects/my-use-case
+python run_wizard_codex.py --output-dir C:/projects/my-use-case --resume <session id>
+```
+
+`../.env` needs `AZURE_API_KEY` and `AZURE_ENDPOINT` (the names gaik and the PoCs read).
+The differences from Option 2:
+
+- Codex's sandbox stands in for `agent_tool_guard.py`: commands write only in the wizard
+  folder and the output folder and reach the network. The wizard folder is not
+  write-protected, so run from a clean checkout and check `git status` afterwards.
+- Codex gets a settings folder of its own per output folder, so your `~/.codex` settings,
+  plugins and MCP servers, the repository's `AGENTS.md` and your skills in `~/.agents/skills`
+  are not loaded. Codex's bundled skills stay listed.
+- The model's Codex metadata (instructions, tools, context window) is copied from
+  `~/.codex/models_cache.json`, which a Codex signed in to ChatGPT keeps. Without it, or for a
+  deployment named other than the model, Codex warns and runs the model on generic defaults.
+- On Windows it uses Codex's `mxc` sandbox (`WIZARD_CODEX_WINDOWS_SANDBOX` picks another).
+- There is no cost limit; `--max-budget-usd` has no Codex counterpart.
+
 ### Option 3 — Wizard as a web chat (demo website)
 
 The wizard is also integrated as a streaming chat page in the demo website at
@@ -365,6 +393,7 @@ solution_wizard/
 ├── SKILL.md                          # orchestration layer (agent instructions)
 ├── README.md                         # this file
 ├── run_wizard_interactive.py         # interactive CLI session (Claude Agent SDK, Azure Foundry)
+├── run_wizard_codex.py               # experimental: the same session on Codex (Azure OpenAI)
 ├── agent_tool_guard.py               # what the agent's tools may touch (PreToolUse hook)
 ├── schemas/
 │   ├── use_case_blueprint.schema.json  # exported from Pydantic (do not hand-edit)
