@@ -24,7 +24,19 @@ Python only, and a running API with a working agent (`implementation_layer/WIZAR
 
    - `--only invoice-extraction,policy-rag` runs some cases, `--list` shows them.
    - `--stop-at-gate 1` is the quick pass (a minute or two a case) after a change to the early
-     conversation.
+     conversation. It stops before the components are chosen and before the scenarios that
+     come after Gate 1, which it reports as `skip`.
+   - Each session a walk leaves before Gate 4 (a `--stop-at-gate` pass, a case that gave up)
+     keeps one of its user's places for sessions in progress, three unless
+     `WIZARD_MAX_SESSIONS_PER_USER` says otherwise, and at the limit the next case fails at
+     its start with `429 session_limit`. For more than a few cases on the local stack, start
+     it with the variable at `0`; elsewhere delete the earlier runs' sessions
+     (`DELETE <base>/sessions/<id>` with the `X-Wizard-User-Id` header; `summary.md` names
+     each session) or run as another user with `--user` (default `dev@gaik.local`).
+   - A user's spend is capped as well (`WIZARD_USER_MAX_COST_USD`, $10.80 unless set, over
+     all their sessions; deleting one gives nothing back), and at the cap every message is
+     refused with `402 usage_cap`. A set run on the deployment's model can reach it: run as
+     another `--user`, or start the local stack with the variable at `0` (no cap).
    - `--run` uploads the case's `inputs` and starts the PoC test run at the PoC step. Where
      the API has a sandbox it is needed: Gate 3 is refused there without a successful run.
      Without a sandbox the check is reported as skipped and Gate 3 is approved without a run.
@@ -72,25 +84,38 @@ blueprint changes, so make them again then.
 name, with the conversation, blueprint versions and files; each import is a new copy:
 
 ```bash
-# local Docker stack
+# local Docker stack, from implementation_layer/wizard_api
 docker compose cp <folder>/invoice-extraction-gate2.zip wizard-api:/tmp/s.zip
-docker compose exec wizard-api python -m wizard_api.session_admin import /tmp/s.zip --user dev@gaik.local
-# an API run on the host: python -m wizard_api.session_admin import <zip> --user dev@gaik.local
+MSYS_NO_PATHCONV=1 docker compose exec \
+  -e 'NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=dev-compose-encryption-key-32chars!!' \
+  wizard-api python -m wizard_api.session_admin import /tmp/s.zip --user dev@gaik.local
 ```
+
+`MSYS_NO_PATHCONV=1` keeps Git Bash on Windows from turning `/tmp/s.zip` into a Windows
+path; elsewhere it does nothing. The key is the web app's (the compose stack's default; use
+yours if `wizard-ui` has its own `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` or
+`WIZARD_PSEUDONYM_KEY`), so the copy is saved under the owner id the web app looks the user
+up by. Without it the copy is saved under the address, and the web app moves such sessions
+only on the user's first request after it starts: a copy made later stays out of the list
+until `wizard-ui` restarts. An API run on the host (`scripts/dev-api.sh`) takes the same
+`python -m wizard_api.session_admin import <zip> --user ...` in its own environment, with the
+web app's key set the same way.
 
 It prints the new session's id, step and gates; open it in the web app's session list and
 approve the gate there to go on. A copy takes a place like a new session: past the user's
 limit on sessions in progress (`WIZARD_MAX_SESSIONS_PER_USER`, 3 unless set) it is refused, so
-remove old copies or start the local stack with the variable at `0`. The agent has no transcript for the copy, so its first turn
-starts from the last stored messages and the files: what it read and reasoned before is
-gone, and the first reply can differ from the one in the original session. The copy asks
-the usage-data question again. On a deployed instance run the import in the api pod
-(`oc cp`, then `oc exec`), and only with snapshots of synthetic cases.
+remove old copies or start the local stack with the variable at `0`. The agent has no
+transcript for the copy, so its first turn starts from the last stored messages and the
+files: what it read and reasoned before is gone, and the first reply can differ from the one
+in the original session. The copy asks the usage-data question again. On a deployed instance
+run the import in the api pod (`oc cp`, then `oc exec` with the web app's key in the same
+variable), and only with snapshots of synthetic cases.
 
-For cheap local turns after the jump, set `ANTHROPIC_MODEL=claude-haiku-5-5` beside the
+For cheap local turns, in a run of the set or after the jump, set `ANTHROPIC_MODEL=claude-haiku-5-5` beside the
 Foundry variables in `wizard_api/.env` or the shell, where `docker-compose.yml` takes them
 from; the resource needs a deployment of that name. A Haiku session tests the flow and
-the UI, not the agent's quality.
+the UI, not the agent's quality. Its replies are quick: the first one can end before
+`reload_mid_reply` joins it, and the check is then `skip`.
 
 ## Read the result
 
@@ -105,6 +130,8 @@ questions, components, package files, test runs started) and the checks of each 
   gate reopening, `/chat/stream` or `/agent/end`).
 - A failure that names a refusal (`last refusal: 429 ...`) or a lost connection comes from the
   environment, not the wizard: run that case again with `--only` into a new `--out` folder.
+  A `429 session_limit` when a case starts and a `402 usage_cap` stay until the user's places
+  are freed or the cap is raised (Run it, step 2).
 - `change_in_chat` (after Gate 2) passes only if the agent reopens a gate with its own tool;
   the API compares approved content by itself only after Gate 3 (`change_after_gate3`).
 - Question rounds and questions are what the wizard asked before it presented the

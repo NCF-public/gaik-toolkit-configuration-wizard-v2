@@ -331,8 +331,8 @@ def run_due(
 
     The first run is always due. A later one is due while fewer than 'limit' have been
     started and the package is not the one the last run ran: by what the API reports
-    for the package (``package_id``), or, where it reports nothing, when the last run
-    failed and the wizard has replied since.
+    for the package (``package_id``), or, where it reports nothing or the last run did
+    not start, when the last run failed and the wizard has replied since.
     """
     if runs == 0:
         return True
@@ -439,8 +439,11 @@ def repository_of(path: Path) -> Path | None:
 
 
 def content_digest(detail: dict) -> str:
-    """What the gates approve, hashed over the parts the API itself compares."""
-    parts = ("id", "type", "component", "parameters", "depends_on")
+    """What the gates approve, as the session detail shows it, hashed.
+
+    A step's options are its ``settings`` in the detail (``parameters`` in an older API's).
+    """
+    parts = ("id", "type", "component", "settings", "parameters", "depends_on")
     steps = [{k: st.get(k) for k in parts} for st in detail.get("blueprint", {}).get("steps") or []]
     approved = {"steps": steps, "output": detail.get("target_output_spec")}
     return hashlib.sha256(
@@ -499,6 +502,7 @@ class Walk:
         self.stream_errors: list[dict] = []
         self.turn_limits = 0  # replies stopped at the most steps one message may take
         self.last_kinds: set[str] = set()
+        self.last_reply = ""  # the text of the last reply, "" when the message was refused
         self.sid = ""
         self.replies = 0
         self.refused = ""
@@ -548,6 +552,7 @@ class Walk:
                 # Not given: a later question or the note before Gate 1 can carry them.
                 self.note(f"! answers not sent: {', '.join(label for _, label, _ in pending)}")
             self.last_kinds = set()
+            self.last_reply = ""
             return ""
         for index, label, where in pending:
             self.sent.add(index)
@@ -559,7 +564,7 @@ class Walk:
             self.note(f"! the reply's stream was lost ({err}); joining it again")
             reply, tools, problems, kinds = self.rejoin()
         self.replies += 1
-        self.unread_reply = reply
+        self.unread_reply = self.last_reply = reply
         self.last_kinds = kinds
         self.log(f"USER: {message}")
         self.log(
@@ -643,7 +648,11 @@ class Walk:
         return "\n".join(lines) + (f"\n\n{go_on}" if unmatched else ""), True
 
     def send_unsent_answers(self) -> bool:
-        """Before Gate 1: give the scripted answers no question drew out, once."""
+        """Before Gate 1: give the scripted answers no question drew out, once.
+
+        True when the API took some of them; a refused message leaves them unsent
+        and the walk goes on to the gate rather than asking again and again.
+        """
         left = [i for i in range(len(self.answers)) if i not in self.sent]
         if not left:
             return False
@@ -659,7 +668,7 @@ class Walk:
             self.pending.append((index, label, "before Gate 1"))
             message += line
         self.say(message)
-        return True
+        return bool(self.sent.intersection(left))
 
     def state_line(self, d: dict) -> str:
         steps = d.get("blueprint", {}).get("steps") or []
@@ -703,12 +712,18 @@ class Walk:
             {"message": "hei", "locale": self.locale},
             stream=True,
         )
-        refused = isinstance(second, dict) and second.get("_error") == 409
+        # 409 while a reply runs; a user near a usage cap or the message rate is
+        # refused with 429 before that check is reached.
+        refused_with = second.get("_error") if isinstance(second, dict) else None
+        refused = refused_with in (409, 429)
         if not isinstance(second, dict):
             # Accepted after all (the first reply had just ended): it is a turn of its
             # own now, which runs on even if its stream is closed. Read it to its end so
             # the walk does not run into it, and keep it in the log.
-            probe_reply, _, probe_problems, _ = read_reply(second)
+            try:
+                probe_reply, _, probe_problems, _ = read_reply(second)
+            except LOST_STREAM as err:
+                probe_reply, probe_problems = f"(its stream was lost: {err})", []
             self.log("USER: hei")
             self.log("WIZARD (probe accepted):")
             self.log(probe_reply)
@@ -726,14 +741,20 @@ class Walk:
                     "reload_mid_reply", "fail", f"could not join the running reply: {joined}"
                 )
         else:
-            reply, _, _, _ = read_reply(joined)
+            try:
+                reply, _, _, _ = read_reply(joined)
+            except LOST_STREAM as err:
+                sender.join()
+                self.check("reload_mid_reply", "skip", f"the second connection was lost: {err}")
+                return
             sender.join()
             same = reply.strip() == (result.get("reply") or "").strip()
             self.check(
                 "reload_mid_reply",
                 "pass" if reply.strip() and refused else "fail",
                 f"joined reply {len(reply)} chars, same text as the first reader: {same}; "
-                f"a second message while replying was {'refused (409)' if refused else 'NOT refused'}",
+                "a second message while replying was "
+                + (f"refused ({refused_with})" if refused else "NOT refused"),
             )
         sender.join()
 
@@ -936,15 +957,26 @@ class Walk:
         run = {"number": number, "version": version, "ok": False, "replies": self.replies}
         self.runs.append(run)
         if "_error" in started:
+            # Not a run of this package: one more is due once the wizard has replied,
+            # as after a failed run, not only once the package has changed.
+            run["version"] = None
             self.record("poc_run", "fail", f"run {number} did not start: {str(started)[:300]}")
             return
         run_id = started["run_id"]
         # Follow the run the way the PoC tab does: the API records a successful run
-        # (which Gate 3 asks for) and saves its log for the agent as this stream ends.
-        stream = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}/stream", stream=True)
-        if not isinstance(stream, dict):
-            for _ in stream:
-                pass
+        # (which Gate 3 asks for) and saves its log for the agent as this stream ends,
+        # so a stream that is lost is followed again.
+        for _ in range(5):
+            stream = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}/stream", stream=True)
+            if isinstance(stream, dict):
+                break
+            try:
+                for _ in stream:
+                    pass
+                break
+            except LOST_STREAM as err:
+                self.note(f"! the run's stream was lost ({err}); following it again")
+                time.sleep(3)
         status = self.api.call("GET", f"/sessions/{self.sid}/runs/{run_id}")
         deadline = time.time() + 20 * 60
         while not status.get("finished") and "_error" not in status and time.time() < deadline:
@@ -994,6 +1026,14 @@ class Walk:
             {"user_id": self.api.user, "title": c["title"], "aiops_recording": "stored"},
         )
         if "_error" in created:
+            if created["_error"] == 429 and "session_limit" in created["_body"]:
+                # Each session a walk leaves before Gate 4 keeps one of the user's places.
+                raise RuntimeError(
+                    f"{self.api.user} has as many sessions in progress as the API allows "
+                    "(WIZARD_MAX_SESSIONS_PER_USER, 3 unless set): delete the earlier runs' "
+                    "sessions, run as another --user, or start the local stack with the "
+                    "variable at 0"
+                )
             raise RuntimeError(f"could not create a session: {created}")
         self.sid = created["id"]
         self.note(f"SESSION {self.sid} · {c['title']}")
@@ -1029,6 +1069,9 @@ class Walk:
             if gate and d["gate_statuses"].get(f"gate_{gate}") != "approved":
                 if gate == 1 and self.answers and self.send_unsent_answers():
                     continue  # the wizard has heard every scripted answer before Gate 1
+                if gate == 3 and self.version_before_reopen is not None:
+                    # A change that reopened Gate 3 alone comes back here, not by the PoC step.
+                    self.package_ready()
                 self.snapshot(gate)
                 approval = {"gate_statuses": {f"gate_{gate}": "approved"}}
                 res = self.api.call("PATCH", f"/sessions/{self.sid}", approval)
@@ -1065,8 +1108,9 @@ class Walk:
                 # here, and the page's "Next step" takes the session on to Gate 3.
                 self.api.call("PATCH", f"/sessions/{self.sid}", {"step": 11})
                 continue
-            if step == 12:
-                # The page's "Next step" from the documentation phase onto Gate 4.
+            if step == 12 and self.last_reply.strip():
+                # From the documentation phase onto Gate 4, once the wizard has answered
+                # Gate 3's approval, as the web app waits for that reply.
                 self.api.call("PATCH", f"/sessions/{self.sid}", {"step": 13})
                 continue
             idle += 1
@@ -1127,7 +1171,11 @@ class Walk:
                 "info",
                 f"{len(self.answers)} answers: "
                 + "; ".join(f"{len(v)} {k} ({', '.join(v) or '-'})" for k, v in where.items())
-                + (f"; {unsent} not sent, the walk ended before Gate 1" if unsent else ""),
+                + (
+                    f"; {unsent} not sent (the walk ended before Gate 1, or the API refused them)"
+                    if unsent
+                    else ""
+                ),
             )
         if self.runs:
             self.check(
@@ -1161,12 +1209,13 @@ class Walk:
             elif ended.get("_error") in (404, 405):
                 self.check("end_session", "skip", "this API has no /agent/end")
             else:
-                live = (self.detail() or {}).get("agent_live")
-                self.check(
-                    "end_session",
-                    "pass" if "_error" not in ended and not live else "fail",
-                    f"agent_live {live}",
-                )
+                after = self.detail() or {}
+                live = after.get("agent_live")
+                detail = f"agent_live {live}"
+                if "_error" in after:
+                    detail += f"; the session could not be read: {after['_error']}"
+                ok = "_error" not in ended and "_error" not in after and not live
+                self.check("end_session", "pass" if ok else "fail", detail)
         (self.out / f"{self.id}.json").write_text(
             json.dumps(
                 {

@@ -180,6 +180,7 @@ class ScriptedAnswers(unittest.TestCase):
             message, _ = walk.reply_to(["What is the schema?"])
             walk.say(message)
             self.assertEqual((walk.sent, walk.answer_log), (set(), []))
+            self.assertFalse(walk.send_unsent_answers())  # refused: on to the gate
             api.refuse = False
             self.assertTrue(walk.send_unsent_answers())
             self.assertIn("- Use the Ticket schema.", api.said[-1])
@@ -368,6 +369,77 @@ class QuickPace(unittest.TestCase):
         self.assertEqual(run_usecases.quick_pace_result(2, 1), "fail")
 
 
+class SessionLimit(unittest.TestCase):
+    def test_a_full_set_of_places_names_the_limit_and_the_way_out(self):
+        class FullApi:
+            user = "dev@gaik.local"
+
+            def call(self, method, path, body=None, stream=False, raw=None):
+                body = '{"detail":{"error":"session_limit","message":"3 sessions in progress"}}'
+                return {"_error": 429, "_body": body}
+
+        case = {"id": "inv", "title": "t", "locale": "en", "description": "d"}
+        opts = argparse.Namespace(pace=None, snapshot="", stop_at_gate=1, run=False)
+        with tempfile.TemporaryDirectory() as folder:
+            result = run_usecases.Walk(FullApi(), case, Path(folder), opts).walk()
+        walk = next(c for c in result["checks"] if c["name"] == "walk")
+        self.assertEqual(walk["result"], "fail")
+        self.assertIn("WIZARD_MAX_SESSIONS_PER_USER", walk["detail"])
+        self.assertIn("dev@gaik.local", walk["detail"])
+
+
+class WalkEdges(unittest.TestCase):
+    OPTS = argparse.Namespace(pace=None, snapshot="", stop_at_gate=0, run=True, cases="")
+
+    def walk(self, folder, api, **case):
+        case = {"id": "inv", "title": "t", "locale": "en", "description": "d", **case}
+        walk = run_usecases.Walk(api, case, Path(folder), self.OPTS)
+        walk.sid = "s1"
+        return walk
+
+    def test_a_change_of_a_step_setting_is_a_change(self):
+        detail = {"blueprint": {"steps": [{"id": "x", "type": "ai", "settings": {"a": 1}}]}}
+        changed = {"blueprint": {"steps": [{"id": "x", "type": "ai", "settings": {"a": 2}}]}}
+        self.assertNotEqual(
+            run_usecases.content_digest(detail), run_usecases.content_digest(changed)
+        )
+
+    def test_a_run_that_did_not_start_is_tried_again_after_a_reply(self):
+        class NoStartApi:
+            user = "u"
+
+            def call(self, method, path, body=None, stream=False, raw=None):
+                if path.endswith("/poc/files"):
+                    return {"generated": True, "files": ["run_poc.py"], "package_digest": "p1"}
+                return {"_error": 500, "_body": "the sandbox did not answer"}
+
+        with tempfile.TemporaryDirectory() as folder:
+            walk = self.walk(folder, NoStartApi())
+            walk.run_poc()
+            self.assertIsNone(walk.runs[0]["version"])
+            self.assertFalse(walk.another_run_due())  # the same package, no reply yet
+            walk.replies += 1
+            self.assertTrue(walk.another_run_due())
+            walk.log_file.close()
+
+    def test_an_unreadable_session_does_not_pass_end_session(self):
+        class GoneApi:
+            user = "u"
+
+            def call(self, method, path, body=None, stream=False, raw=None):
+                if path.endswith("/agent/end"):
+                    return {}
+                return {"_error": 500, "_body": "down"}
+
+        with tempfile.TemporaryDirectory() as folder:
+            walk = self.walk(folder, GoneApi(), scenarios=["end_session"])
+            walk.replies = 1
+            result = walk.finish()
+        check = next(c for c in result["checks"] if c["name"] == "end_session")
+        self.assertEqual(check["result"], "fail")
+        self.assertIn("could not be read", check["detail"])
+
+
 class ExportApi:
     """An API whose export answers with a zip, or refuses it."""
 
@@ -381,7 +453,7 @@ class ExportApi:
         self.calls.append((method, path))
         if self.refuse:
             return {"_error": 404, "_body": "no such session"}
-        return io.BytesIO(b"PK zip of " + path.encode())
+        return io.BytesIO(f"PK zip {len(self.calls)} of {path}".encode())
 
 
 class Snapshots(unittest.TestCase):
@@ -403,7 +475,7 @@ class Snapshots(unittest.TestCase):
             walk.log_file.close()
             self.assertEqual(api.calls, [("GET", "/sessions/s1/export")] * 2)
             saved = Path(folder, "inv-gate3.zip").read_bytes()
-            self.assertEqual(saved, b"PK zip of /sessions/s1/export")
+            self.assertEqual(saved, b"PK zip 2 of /sessions/s1/export")  # the approved one
 
     def test_nothing_is_saved_without_the_option(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -426,10 +498,13 @@ class Snapshots(unittest.TestCase):
             walk.snapshot(2)
             walk.log_file.close()
             self.assertEqual(
-                Path(folder, "inv-gate2.zip").read_bytes(), b"PK zip of /sessions/s1/export"
+                Path(folder, "inv-gate2.zip").read_bytes(), b"PK zip 1 of /sessions/s1/export"
             )
             self.assertFalse(Path(folder, "inv-gate2.zip.part").exists())
-            self.assertIn("not saved: the forward dropped", Path(folder, "inv.log").read_text())
+            self.assertIn(
+                "not saved: the forward dropped",
+                Path(folder, "inv.log").read_text(encoding="utf-8"),
+            )
 
     def test_a_refused_export_is_noted_and_the_walk_goes_on(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -437,7 +512,9 @@ class Snapshots(unittest.TestCase):
             walk.snapshot(3)
             walk.log_file.close()
             self.assertFalse(Path(folder, "inv-gate3.zip").exists())
-            self.assertIn("not saved: no such session", Path(folder, "inv.log").read_text())
+            self.assertIn(
+                "not saved: no such session", Path(folder, "inv.log").read_text(encoding="utf-8")
+            )
 
 
 if __name__ == "__main__":
