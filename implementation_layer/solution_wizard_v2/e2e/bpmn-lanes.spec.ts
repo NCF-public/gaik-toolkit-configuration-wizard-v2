@@ -178,7 +178,12 @@ test.describe("BPMN lanes", () => {
     await expect(page.locator(".bpmn-editable")).toHaveAttribute("aria-busy", "false");
     await clickLane(page, lanes[0].id);
     await clickLane(page, lane.id);
-    await page.locator('.djs-context-pad .entry[data-action="gaik-lane-rename"]').click();
+    // The pad of this lane, settled: the refusal above redraws the diagram, and a pad
+    // opened during that redraw is replaced under the click (a flake in CI).
+    await expect(page.locator(`.bpmn-editable .djs-shape[data-element-id="${lane.id}"]`)).toHaveClass(/selected/);
+    await expect(pad.locator(".entry")).toHaveCount(2);
+    await expect(page.locator(".bpmn-editable")).toHaveAttribute("aria-busy", "false");
+    await pad.locator('.entry[data-action="gaik-lane-rename"]').click();
     const editor = page.locator(".djs-direct-editing-parent");
     await expect(editor).toBeVisible();
     await page.keyboard.press("ControlOrMeta+a");

@@ -288,17 +288,65 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
         return []
     step_ids = {_ref(s.get("id")) for s in steps + _dicts(process.get("manual_steps"))}
     step_ids.discard("")
+    # Steps of type "decision", and each step's dependents, for a choice written twice.
+    decision_steps = {_ref(s.get("id")) for s in steps if _text(s.get("type")) == "decision"}
+    dependents: dict[str, set[str]] = {}
+    for s in steps:
+        for dep in s.get("depends_on") or []:
+            if isinstance(dep, str):
+                dependents.setdefault(dep, set()).add(_ref(s.get("id")))
+    seen_after: set[str] = set()
 
     problems: list[tuple[str, str, str]] = []
     for i, decision in enumerate(_dicts(process.get("decision_points"))):
         path = f"business_process.decision_points[{i}]"
         name = _text(decision.get("name")) or _text(decision.get("id"))
         after = _ref(decision.get("after"))
+        branches = _dicts(decision.get("branches"))
+        # "end" is kept: a point that lets some cases end is not a decision step's choice.
+        targets = {_ref(b.get("target")) for b in branches} - {""}
         if not after.strip():
             problems.append((path, name, "after is empty"))
         elif after not in step_ids:
             problems.append((path, name, f'after names no step: "{after}"'))
-        branches = _dicts(decision.get("branches"))
+        elif after in decision_steps:
+            # Right after a decision step: the step's own gateway is left with one
+            # way out, into this point's. One of them is enough.
+            problems.append(
+                (
+                    path,
+                    name,
+                    f'comes right after the step of type "decision" "{after}", which already '
+                    "decides there: write the choice once, as that step or as this decision point",
+                )
+            )
+        else:
+            # The same choice written twice is drawn twice (the point is its own
+            # gateway): the point leads to two or more of the very steps a
+            # decision step right after it chooses between, and nowhere else.
+            repeated = next(
+                (
+                    d
+                    for d in sorted(dependents.get(after, set()))
+                    if d in decision_steps
+                    and len(targets) >= 2
+                    and targets <= dependents.get(d, set())
+                ),
+                None,
+            )
+            if repeated is not None:
+                problems.append(
+                    (
+                        path,
+                        name,
+                        f'repeats the choice of the step of type "decision" "{repeated}": '
+                        "write the choice once, as that step or as this decision point",
+                    )
+                )
+        if after.strip() and after in step_ids:
+            if after in seen_after:
+                problems.append((path, name, f'another decision point is already after "{after}"'))
+            seen_after.add(after)
         if len(branches) < 2:
             problems.append((path, name, f"has {len(branches)} branches, needs at least two"))
         for n, branch in enumerate(branches, start=1):
