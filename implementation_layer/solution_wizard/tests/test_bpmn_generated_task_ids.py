@@ -113,13 +113,34 @@ def test_the_data_store_is_placed_by_the_sender_that_writes_it():
     assert abs(task_cx - store_cx) < float(task.get("width"))
 
 
-def test_a_step_id_the_diagram_draws_cleaned_is_kept_too():
+def test_a_step_id_the_diagram_draws_cleaned_is_kept_as_it_was():
+    """submit-to-erp is drawn as Activity_submit_to_erp: an unchanged save
+    finds the step by the id it is drawn under, and keeps its id, component
+    and description (not a new step "Added from BPMN canvas")."""
     v2 = _v2("extract", "submit-to-erp")
+    v2["steps"][1]["description"] = "Send the approved invoice to the ERP"
     xml, _ = _draw(v2)
     assert 'id="Activity_submit_to_erp"' in xml
 
     out = sync_v2_blueprint_from_bpmn_xml(v2, xml)
 
-    # Not dropped as a generated task. (It comes back under the drawn id, as
-    # any id the diagram cleans does: the sync's rule, not this one.)
-    assert len(out["steps"]) == 2
+    assert [s["id"] for s in out["steps"]] == ["extract", "submit-to-erp"]
+    kept = out["steps"][1]
+    assert kept["component"] == "custom"
+    assert kept["description"] == "Send the approved invoice to the ERP"
+
+
+def test_an_unchanged_save_keeps_each_step_record():
+    v2 = _v2("extract", "submit_to_erp", "generate_pdf_final")
+    for s in v2["steps"]:
+        s["description"] = f"What {s['id']} does"
+    xml, _ = _draw(v2)
+
+    out = sync_v2_blueprint_from_bpmn_xml(v2, xml)
+
+    for before, after in zip(v2["steps"], out["steps"]):
+        assert (after["id"], after["component"], after["description"]) == (
+            before["id"],
+            before["component"],
+            before["description"],
+        )

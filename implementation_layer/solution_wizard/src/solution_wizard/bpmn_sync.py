@@ -318,8 +318,11 @@ def sync_v2_blueprint_from_bpmn_xml(
 
     from solution_wizard.bpmn_generator import _safe
 
-    # The steps, by their ids and by the ids the generator draws them under.
-    step_ids = frozenset(old_by_id) | frozenset(f"Activity_{_safe(i)}" for i in old_by_id)
+    # The steps by the ids the generator draws them under (Activity_<id>, the id
+    # cleaned: submit-to-erp is Activity_submit_to_erp), so a step is found again
+    # whatever its id holds.
+    drawn_as = {f"Activity_{_safe(i)}": s for i, s in old_by_id.items()}
+    step_ids = frozenset(old_by_id) | frozenset(drawn_as)
     ordered_ids = _ordered_task_ids(root, step_ids)
     if not ordered_ids:
         return v2_blueprint
@@ -331,8 +334,9 @@ def sync_v2_blueprint_from_bpmn_xml(
         label = _safe_name(_task_label(task_el.get("name") if task_el is not None else ""))
         docs = _documentation_text(task_el) if task_el is not None else ""
         step_id = _safe_id(_bpmn_id_to_step_id(tid))
-        # Prefer exact blueprint id; fall back to Activity_-stripped id.
-        old = old_by_id.get(step_id) or old_by_id.get(tid)
+        # Prefer exact blueprint id; fall back to the Activity_-stripped id, then
+        # to the step drawn under this id (an id the diagram cleaned).
+        old = old_by_id.get(step_id) or old_by_id.get(tid) or drawn_as.get(tid)
         resolved_id = str(old.get("id")) if old else step_id
         if resolved_id in seen_step_ids:
             continue
