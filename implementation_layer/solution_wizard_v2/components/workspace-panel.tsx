@@ -1145,12 +1145,15 @@ export function WorkspacePanel({
   useEffect(() => {
     const onReplying = (e: Event) => {
       const replying = Boolean((e as CustomEvent<boolean>).detail);
+      const wasReplying = chatActivity.current.replying;
       chatActivity.current = chatReplyingChanged(chatActivity.current, replying);
       setWizardReplying(replying);
-      // Also when the reply ends: the tab reads the package while the wizard
+      // Also when a reply ends: the tab reads the package while the wizard
       // writes it, and a read from before the last write left the package
       // "unfinished" in red and Gate 3 open until the next read came back.
-      setPackageStale(true);
+      // Not for the chat's first word that nobody replies: Gate 3 waited for
+      // a read of the package from a tab that was not open.
+      if (replying || wasReplying) setPackageStale(true);
       // The read this starts replaces any that was on its way.
       if (!replying) setPocRefresh((n) => n + 1);
     };
