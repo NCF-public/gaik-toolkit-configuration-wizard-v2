@@ -64,10 +64,12 @@ jobs:
       - name: Install wizard_api
         working-directory: implementation_layer/wizard_api
         run: pip install -e ".[dev]"
-      - name: Ruff (wizard_api)
+      - name: Ruff (wizard_api; format as upstream's test.yml checks it)
+        # Upstream's test.yml checks the format of all of implementation_layer/,
+        # so a delivery with an unformatted file fails there.
         run: |
           pip install ruff==0.14.10
-          ruff format --check implementation_layer/wizard_api/
+          ruff format --check implementation_layer/
           ruff check implementation_layer/wizard_api/
       - name: Pytest wizard_api
         working-directory: implementation_layer/wizard_api
