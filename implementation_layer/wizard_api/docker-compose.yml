@@ -37,6 +37,11 @@ services:
       ANTHROPIC_MODEL:
       # Sessions in progress per user (3 by default); 0 for no limit when importing snapshots.
       WIZARD_MAX_SESSIONS_PER_USER:
+      # Estimated spend of a user over all sessions (10.8 USD by default) and of one
+      # session (5.4 USD); 0 for no cap, for a run of the use case set
+      # (.claude/skills/wizard-usecase-run).
+      WIZARD_USER_MAX_COST_USD:
+      WIZARD_SESSION_MAX_COST_USD:
       # The image runs as root here (Rahti runs it under a non-root uid), and the
       # agent CLI refuses to skip its permission prompts as root ("cannot be used
       # with root/sudo privileges") unless it is told it runs in a sandbox.
