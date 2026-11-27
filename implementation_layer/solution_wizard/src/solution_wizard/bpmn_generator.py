@@ -276,12 +276,14 @@ def wants_report(output_types: Any) -> bool:
 def final_report_step_ids(steps: Any, artifacts: Any) -> List[str]:
     """The steps that write the final report themselves: each outputs a
     generated artifact of type pdf or report, with ``final_output: true``, that
-    it produces. An upload's PDF, or an intermediate PDF the process goes on
-    to use, is not the report."""
+    it produces. An upload's PDF, an intermediate PDF the process goes on to
+    use, or a step of type "decision" (drawn as a gateway) is not the report."""
     artifacts = _as_dict(artifacts)
     out = []
     for step in _as_list(steps):
         step = _as_dict(step)
+        if step.get("type") == "decision":  # drawn as a gateway: it writes nothing
+            continue
         for art_id in _as_list(step.get("outputs")):
             art = _as_dict(artifacts.get(art_id)) if isinstance(art_id, str) else {}
             source = art.get("source")
@@ -1163,53 +1165,25 @@ class _BpmnBuilder:
 
     # -- the agent's own report and send steps: on every way to the end? --
 
-    def _forward_graph(self) -> Tuple[Dict[str, List[str]], List[str]]:
-        """The drawn flows without the ways back, and the nodes in their order.
-
-        Loop flows are left out, and so is any flow back to a node on the way
-        to it from the start (a decision's rework branch is drawn as a plain
-        flow). Returns each node's forward successors and the nodes reached
-        from the start in topological order.
-        """
-        succ: Dict[str, List[str]] = {}
-        for f in self.flows:
-            if not f.is_loop:
-                succ.setdefault(f.src, []).append(f.tgt)
-        fwd: Dict[str, List[str]] = {}
-        state: Dict[str, int] = {"StartEvent_1": 1}
-        post: List[str] = []
-        stack = [("StartEvent_1", iter(succ.get("StartEvent_1", [])))]
-        while stack:
-            node, it = stack[-1]
-            nxt = next(it, None)
-            if nxt is None:
-                state[node] = 2
-                post.append(node)
-                stack.pop()
-                continue
-            if state.get(nxt) == 1:
-                continue
-            fwd.setdefault(node, []).append(nxt)
-            if nxt not in state:
-                state[nxt] = 1
-                stack.append((nxt, iter(succ.get(nxt, []))))
-        return fwd, post[::-1]
-
     def _passes_every_way(self, nodes: List[str]) -> bool:
-        """Every way from the start to the success end passes one of ``nodes``
-        (rework ways left out): the success end cannot be reached with them
-        taken out. A way that skips them all, such as a decision's branch to
-        "end" past them, or another branch of a fork, makes this false."""
+        """Every way from the start to the success end passes one of ``nodes``:
+        with them taken out, the success end cannot be reached over the drawn
+        flows (all of them, loops and rework ways too; a visited set handles the
+        cycles). A way that skips them all, such as a decision's branch to "end"
+        past them, another branch of a fork, or a choice that reaches the rest of
+        the process past them, makes this false."""
         if not nodes:
             return False
-        fwd, _ = self._forward_graph()
+        succ: Dict[str, List[str]] = {}
+        for f in self.flows:
+            succ.setdefault(f.src, []).append(f.tgt)
         seen, todo = set(), ["StartEvent_1"]
         while todo:
             n = todo.pop()
             if n in seen or n in nodes:
                 continue
             seen.add(n)
-            todo.extend(fwd.get(n, []))
+            todo.extend(succ.get(n, []))
         return "EndEvent_success" not in seen
 
     def _new_decision_gateway(self, i: int, dp, beside: str) -> str:

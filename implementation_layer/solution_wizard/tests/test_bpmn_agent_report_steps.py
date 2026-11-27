@@ -675,3 +675,41 @@ def test_a_shape_whose_ways_skip_the_own_steps_draws_as_develop_did(name):
     expected = (FIXTURES / f"{name}.bpmn").read_text(encoding="utf-8").replace("\r\n", "\n")
 
     assert generate_bpmn(Blueprint.model_validate(blueprint)) == expected
+
+
+def test_a_choice_that_skips_the_report_through_a_rework_loop_keeps_the_generated_report():
+    """A decision chooses "write" (the agent's report step) or "get" (an
+    existing record); both lead to a check, which can rework back to "get".
+    The way through "get" skips the report, so the generated one stays."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _report("make_doc", ["extract"]),
+        _step("fetch", deps=["extract"]),
+        _step("check", deps=["make_doc", "fetch"]),
+    ]
+    decisions = [
+        _decision("src", "extract", ("write", "make_doc"), ("get", "fetch")),
+        _decision("ok", "check", ("done", "end"), ("rework", "fetch")),
+    ]
+    bp = _blueprint(
+        steps, {**BASE_ARTS, **_report_art("make_doc")}, targets=(), decisions=decisions
+    )
+    _, kinds, _ = _flows(bp)
+
+    assert PDF in kinds
+
+
+def test_a_decision_step_is_not_taken_for_the_report_writer():
+    """A step of type "decision" is drawn as a gateway: it writes nothing, so a
+    final PDF it declares does not stand for the report."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("route", "decision", deps=["extract"], outputs=["route_pdf"]),
+        _step("done", deps=["route"]),
+    ]
+    arts = {**BASE_ARTS, **_report_art("route")}
+    _, kinds, _ = _flows(_blueprint(steps, arts, targets=()))
+
+    assert PDF in kinds
