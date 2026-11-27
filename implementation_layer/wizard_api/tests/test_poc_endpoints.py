@@ -686,7 +686,7 @@ def test_a_started_run_keeps_the_names_of_the_inputs_it_ran_on(
 
 @requires_postgres
 def test_the_test_data_upload_keeps_to_the_input_limits(client, db_session, monkeypatch) -> None:
-    """The route goes through the limits a case's input has (review of #324 upstream)."""
+    """The route goes through the limits a case's input has."""
     from wizard_api.services import case_service
 
     monkeypatch.setattr(case_service, "MAX_INPUTS_PER_CASE", 1)
@@ -703,6 +703,55 @@ def test_the_test_data_upload_keeps_to_the_input_limits(client, db_session, monk
     assert refused.json()["detail"]["error"] == "input_rejected"
     # The PoC tab words the refusal from its reason.
     assert refused.json()["detail"]["reason"] == "too_many"
+
+
+@requires_postgres
+def test_the_test_data_upload_refuses_both_totals_with_413(client, db_session, monkeypatch) -> None:
+    """The PoC tab tells the test data's total from the session's by the message."""
+    from wizard_api.services import case_service
+
+    sid = _session_ready_to_generate(client, "input-totals")["id"]
+    out = _session_output_dir(db_session, sid)
+    _write_poc(out)
+    pdf = ("a.pdf", b"%PDF-1.7" + b" " * 32, "application/pdf")
+
+    monkeypatch.setattr(case_service, "MAX_CASE_INPUT_BYTES", len(pdf[1]) - 1)
+    test_data_full = client.post(f"/sessions/{sid}/poc/input", files={"file": pdf})
+    assert test_data_full.status_code == 413
+    assert test_data_full.json()["detail"]["error"] == "input_too_large"
+    assert "the test data would exceed" in test_data_full.json()["detail"]["message"]
+
+    monkeypatch.setattr(case_service, "MAX_CASE_INPUT_BYTES", 10 * len(pdf[1]))
+    room = case_service._session_input_bytes(out) + len(pdf[1]) - 1
+    monkeypatch.setattr(case_service, "max_session_input_bytes", lambda: room)
+    session_full = client.post(f"/sessions/{sid}/poc/input", files={"file": pdf})
+    assert session_full.status_code == 413
+    assert "the session's input would exceed" in session_full.json()["detail"]["message"]
+    assert client.get(f"/sessions/{sid}/poc/input").json()["files"] == []
+
+
+@requires_postgres
+def test_removing_a_test_file_goes_through_the_sessions_input_lock(
+    client, db_session, monkeypatch
+) -> None:
+    """The route removes through case_service, which holds the lock the upload takes."""
+    from wizard_api.services import case_service
+
+    sid = _session_ready_to_generate(client, "input-removal")["id"]
+    _write_poc(_session_output_dir(db_session, sid))
+    pdf = ("a.pdf", b"%PDF-1.7", "application/pdf")
+    assert client.post(f"/sessions/{sid}/poc/input", files={"file": pdf}).status_code == 201
+    calls = []
+    original = case_service.delete_sample_input
+
+    def spy(output_dir, poc_dir, filename):
+        calls.append(filename)
+        return original(output_dir, poc_dir, filename)
+
+    monkeypatch.setattr(case_service, "delete_sample_input", spy)
+    assert client.delete(f"/sessions/{sid}/poc/input/a.pdf").status_code == 204
+    assert calls == ["a.pdf"]
+    assert client.delete(f"/sessions/{sid}/poc/input/a.pdf").status_code == 404
 
 
 @requires_postgres

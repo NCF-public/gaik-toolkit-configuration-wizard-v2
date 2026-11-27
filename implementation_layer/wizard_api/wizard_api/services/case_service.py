@@ -256,9 +256,9 @@ def save_sample_input(output_dir: str, poc_dir: str, filename: str, data: bytes)
     """Store one of the PoC's test inputs, within the limits a case's input has.
 
     An upload is at most ``poc_service.MAX_INPUT_BYTES``; without these limits
-    many of them filled the api's volume, which every session shares (review of
-    GAIK-project/gaik-toolkit#324). The test data holds as many files and bytes as
-    one case and counts toward the session's input with its cases. A file of the
+    many of them could fill the api's volume, which every session shares. The
+    test data holds as many files and bytes as one case and counts toward the
+    session's input with its cases. A file of the
     same name replaces the earlier one, so only the difference counts.
 
     The files and bytes a case may hold count only the user's own uploads: the

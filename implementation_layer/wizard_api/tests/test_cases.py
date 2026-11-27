@@ -123,7 +123,7 @@ def test_a_case_holds_so_many_files_and_so_many_bytes(out, monkeypatch):
 
 
 def test_the_pocs_test_data_holds_as_many_files_and_bytes_as_a_case(out, monkeypatch):
-    """PoC uploads had only the per-file limit (review of GAIK-project/gaik-toolkit#324)."""
+    """The PoC's test data is bounded like a case's input, not by the per-file limit alone."""
     monkeypatch.setattr(case_service, "MAX_INPUTS_PER_CASE", 2)
     monkeypatch.setattr(case_service, "MAX_CASE_INPUT_BYTES", 20)
     poc = os.path.join(out, "poc")
