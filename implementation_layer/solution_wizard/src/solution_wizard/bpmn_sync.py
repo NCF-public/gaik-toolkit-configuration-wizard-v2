@@ -152,11 +152,16 @@ def _infer_v2_type(tag: str, bpmn_id: str, old_type: str | None) -> str:
     return old_type or "ai"
 
 
-def _is_synthetic_task(bpmn_id: str) -> bool:
+def _is_synthetic_task(bpmn_id: str, step_ids: frozenset[str] = frozenset()) -> bool:
+    """A task the generator drew by itself: its id has a generated task's
+    prefix and is not one of the blueprint's steps. A step named
+    ``submit_to_erp`` is drawn as ``Activity_submit_to_erp``, and is a step."""
+    if bpmn_id in step_ids or _bpmn_id_to_step_id(bpmn_id) in step_ids:
+        return False
     return any(bpmn_id.startswith(p) for p in _SYNTHETIC_PREFIXES)
 
 
-def _ordered_task_ids(root: ET.Element) -> list[str]:
+def _ordered_task_ids(root: ET.Element, step_ids: frozenset[str] = frozenset()) -> list[str]:
     processes = [el for el in root.iter() if _local(el.tag) == "process"]
     if not processes:
         return []
@@ -193,7 +198,9 @@ def _ordered_task_ids(root: ET.Element) -> list[str]:
         return [
             el.get("id") or ""
             for el in process
-            if el.tag in TASK_TAGS and el.get("id") and not _is_synthetic_task(el.get("id") or "")
+            if el.tag in TASK_TAGS
+            and el.get("id")
+            and not _is_synthetic_task(el.get("id") or "", step_ids)
         ]
 
     ordered: list[str] = []
@@ -205,7 +212,7 @@ def _ordered_task_ids(root: ET.Element) -> list[str]:
             continue
         seen.add(nid)
         node = nodes[nid]
-        if node.tag in TASK_TAGS and nid and not _is_synthetic_task(nid):
+        if node.tag in TASK_TAGS and nid and not _is_synthetic_task(nid, step_ids):
             ordered.append(nid)
         for tgt in outgoing.get(nid, []):
             if tgt not in seen:
@@ -306,12 +313,16 @@ def sync_v2_blueprint_from_bpmn_xml(
         if el.tag in TASK_TAGS and el.get("id"):
             task_by_id[el.get("id") or ""] = el
 
-    ordered_ids = _ordered_task_ids(root)
-    if not ordered_ids:
-        return v2_blueprint
-
     old_steps = list(v2_blueprint.get("steps") or [])
     old_by_id = {str(s.get("id")): s for s in old_steps if s.get("id")}
+
+    from solution_wizard.bpmn_generator import _safe
+
+    # The steps, by their ids and by the ids the generator draws them under.
+    step_ids = frozenset(old_by_id) | frozenset(f"Activity_{_safe(i)}" for i in old_by_id)
+    ordered_ids = _ordered_task_ids(root, step_ids)
+    if not ordered_ids:
+        return v2_blueprint
 
     new_steps: list[dict[str, Any]] = []
     seen_step_ids: set[str] = set()
