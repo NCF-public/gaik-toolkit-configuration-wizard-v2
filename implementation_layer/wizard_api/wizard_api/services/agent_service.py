@@ -397,7 +397,7 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   "Generate PDF report" task and a "Submit to ..." task per integration target
   by itself: when you write your own step for that work, mark it so it is drawn
   once. The step that writes the report outputs an artifact of type "pdf" with
-  source "generated" and produced_by that step; the step that sends to an
+  source "generated", final_output true and produced_by that step; the step that sends to an
   integration target has parameters.integration_target set to the target's
   exact name in technical_spec.integration_targets.
 - THE USER EDITS THE SOLUTION TOO. The user can change the solution in the

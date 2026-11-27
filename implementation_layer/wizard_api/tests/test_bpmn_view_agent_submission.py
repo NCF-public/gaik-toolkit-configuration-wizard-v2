@@ -59,3 +59,35 @@ def test_the_reduced_diagram_draws_no_submit_task_beside_the_agents_step():
 
     assert "Activity_submit_erp_system" not in xml
     assert 'id="Activity_send_erp"' in xml
+
+
+def test_parameters_that_are_not_an_object_keep_the_rest_of_the_agents_process():
+    """A sender whose parameters is a list: the marker is not read, and the
+    draft's rework path is still drawn (it was dropped with the whole draft)."""
+    draft = {
+        "workflow": {
+            "steps": [
+                {"id": "extract", "type": "automated_task", "component": "custom"},
+                {
+                    "id": "send_erp",
+                    "type": "automated_task",
+                    "component": "custom",
+                    "parameters": ["untyped"],
+                },
+            ]
+        },
+        "business_process": {
+            "exceptions": [
+                {
+                    "id": "bad_scan",
+                    "name": "Unreadable",
+                    "attached_to": "send_erp",
+                    "condition": "unreadable",
+                    "outcome": "loop_to:extract",
+                }
+            ]
+        },
+    }
+    xml, _, _ = bpmn_service.generate_bpmn_view(V2, session_id="s", agent_draft=draft)
+
+    assert 'id="Gateway_exc_bad_scan"' in xml

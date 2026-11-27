@@ -244,6 +244,87 @@ def _safe(token: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# The generated report and submission boxes: when the diagram adds them.
+# Plain dicts (a blueprint's JSON, or a draft that does not validate), so that
+# wizard_api's draft note uses the same rules as the drawing.
+# ---------------------------------------------------------------------------
+
+
+def _as_list(value: Any) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _as_dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def wants_report(output_types: Any) -> bool:
+    """``technical_spec.output_types`` asks for a PDF report."""
+    out = [output_types] if isinstance(output_types, str) else _as_list(output_types)
+    return any(str(o).lower() in ("pdf", "report") for o in out)
+
+
+def final_report_step_ids(steps: Any, artifacts: Any) -> List[str]:
+    """The steps that write the final report themselves: each outputs a
+    generated artifact of type pdf or report, with ``final_output: true``, that
+    it produces. An upload's PDF, or an intermediate PDF the process goes on
+    to use, is not the report."""
+    artifacts = _as_dict(artifacts)
+    out = []
+    for step in _as_list(steps):
+        step = _as_dict(step)
+        for art_id in _as_list(step.get("outputs")):
+            art = _as_dict(artifacts.get(art_id)) if isinstance(art_id, str) else {}
+            source = art.get("source")
+            if (
+                str(art.get("type")).lower() in ("pdf", "report")
+                and str(getattr(source, "value", source)).lower() == "generated"
+                and art.get("final_output") is True
+                and art.get("produced_by") == step.get("id")
+            ):
+                out.append(step.get("id"))
+                break
+    return out
+
+
+def named_report_step(steps: Any) -> bool:
+    """The older rule: a step whose id or component names a PDF or report
+    generator ("pdf" or "report_gen" in it) is taken for the report."""
+    for step in _as_list(steps):
+        step = _as_dict(step)
+        ident = f"{step.get('id') or ''} {step.get('component') or ''}".lower()
+        if "pdf" in ident or "report_gen" in ident:
+            return True
+    return False
+
+
+def integration_marker(step: Any) -> Optional[str]:
+    """The step's ``parameters.integration_target``, when it is a string."""
+    marker = _as_dict(_as_dict(step).get("parameters")).get("integration_target")
+    return marker if isinstance(marker, str) and marker else None
+
+
+def report_box_needed(blueprint: Any) -> bool:
+    """The diagram adds a "Generate PDF report" task."""
+    bp = _as_dict(blueprint)
+    steps = _as_dict(bp.get("workflow")).get("steps")
+    return (
+        wants_report(_as_dict(bp.get("technical_spec")).get("output_types"))
+        and not final_report_step_ids(steps, bp.get("artifacts"))
+        and not named_report_step(steps)
+    )
+
+
+def submit_box_targets(blueprint: Any) -> List[str]:
+    """The integration targets the diagram adds a "Submit to …" task for: those
+    no step names exactly in ``parameters.integration_target``."""
+    bp = _as_dict(blueprint)
+    marked = {integration_marker(s) for s in _as_list(_as_dict(bp.get("workflow")).get("steps"))}
+    targets = _as_list(_as_dict(bp.get("technical_spec")).get("integration_targets"))
+    return [str(t) for t in targets if str(t) not in marked]
+
+
+# ---------------------------------------------------------------------------
 # Internal model objects
 # ---------------------------------------------------------------------------
 
@@ -351,6 +432,8 @@ class _BpmnBuilder:
         self._consumed_exception_ids: set = set()
         # integration target -> the id of the "Submit to …" task drawn for it
         self._send_task_of: Dict[str, str] = {}
+        # decision branches to "end": (decision id, its gateway, the flow)
+        self._end_branches: List[Tuple[str, str, _Flow]] = []
 
     # -- id allocators ----------------------------------------------------
 
@@ -886,35 +969,35 @@ class _BpmnBuilder:
 
     # -- enrichment: integration target -> data store + send task ---------
 
+    def _step_dicts(self) -> List[dict]:
+        """The workflow steps as the shared rules above read them."""
+        return [
+            {
+                "id": s.id,
+                "component": s.component,
+                "outputs": list(s.outputs or []),
+                "parameters": s.parameters,
+            }
+            for s in self.bp.workflow.steps
+        ]
+
     def _own_report_steps(self) -> List[str]:
-        """The workflow steps that write the report themselves: each outputs a
-        *generated* artifact of type pdf or report that it produces. An upload
-        step's PDF (``source: user_upload``) is not one."""
-        out = []
-        for s in self.bp.workflow.steps:
-            for art_id in s.outputs:
-                art = self.bp.artifacts.get(art_id)
-                if (
-                    art is not None
-                    and str(art.type).lower() in ("pdf", "report")
-                    and str(getattr(art.source, "value", art.source)).lower() == "generated"
-                    and art.produced_by == s.id
-                ):
-                    out.append(s.id)
-                    break
-        return out
+        """The workflow steps that write the final report themselves
+        (`final_report_step_ids`)."""
+        artifacts = {k: a.model_dump(mode="json") for k, a in self.bp.artifacts.items()}
+        return final_report_step_ids(self._step_dicts(), artifacts)
 
     def _own_submission_steps(self, target: Optional[str] = None) -> List[str]:
         """The workflow steps that send to an integration target themselves: their
         ``parameters.integration_target`` is the target's exact name (any target
         when ``target`` is None)."""
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
-        known = [str(t) for t in spec.get("integration_targets") or []]
+        known = [str(t) for t in _as_list(spec.get("integration_targets"))]
         out = []
-        for s in self.bp.workflow.steps:
-            marked = (s.parameters or {}).get("integration_target")
-            if isinstance(marked, str) and marked in known and (target is None or marked == target):
-                out.append(s.id)
+        for step in self._step_dicts():
+            marked = integration_marker(step)
+            if marked in known and (target is None or marked == target):
+                out.append(step["id"])
         return out
 
     def _enrich_integration(self) -> None:
@@ -988,34 +1071,21 @@ class _BpmnBuilder:
         it" order.
 
         Nothing is added when the workflow already has a step that writes the
-        report (`_own_report_steps`: a generated pdf/report artifact it
-        produces), or, as before, a step whose id or component names a PDF/report
-        generator (case-insensitive), so intentionally modelled blueprints are
-        never double-counted. What the agent wrote is trusted: a report step on
-        one branch only is not copied onto the others. When a step of the agent's
-        own sends to an integration target (`_own_submission_steps`), the
-        generated report goes in front of it, not after it.
+        final report (`_own_report_steps`: a generated pdf/report artifact with
+        final_output it produces), or, as before, a step whose id or component
+        names a PDF/report generator (case-insensitive), so intentionally
+        modelled blueprints are never double-counted. What the agent wrote is
+        trusted: a report step on one of a decision's own branches only is not
+        copied onto the others (a branch to "end" is, `_route_end_branches`).
+        With the agent's own send step and no report step of its own, the
+        generated report still goes here, after approval, so it is drawn after
+        that send step.
         """
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
-        out = spec.get("output_types") or []
-        if isinstance(out, str):
-            out = [out]
-        if not any(str(o).lower() in ("pdf", "report") for o in out):
+        if not wants_report(spec.get("output_types")):
             return
-        if self._own_report_steps():
+        if self._own_report_steps() or named_report_step(self._step_dicts()):
             return
-
-        # Skip if an explicit PDF generation step is already in the workflow.
-        for s in self.bp.workflow.steps:
-            sid_low = s.id.lower()
-            comp_low = (s.component or "").lower()
-            if (
-                "pdf" in sid_low
-                or "pdf" in comp_low
-                or "report_gen" in sid_low
-                or "report_gen" in comp_low
-            ):
-                return
 
         pdf_id = self._free_id("Activity_generate_pdf")
         pdf_node = _Node(
@@ -1027,19 +1097,6 @@ class _BpmnBuilder:
         )
         self.nodes[pdf_id] = pdf_node
         self._map(pdf_id, "pdf_generation", "derived:pdf_output")
-
-        # The agent's own submission step: the report is generated before it.
-        senders = self._own_submission_steps()
-        if senders:
-            # Into the step itself: behind a join before it, the join's one flow
-            # out is rerouted, so the join still waits for all its ways.
-            node = self._lookup_node_for_step(senders[0])
-            into = [f for f in self.flows if f.tgt == node and not f.is_loop]
-            if into:
-                for f in into:
-                    f.tgt = pdf_id
-                self._add_flow(pdf_id, node)
-                return
 
         # The one way into the success end: the approved ("Yes") flow when a review
         # is the only way to finish, else the point where all the ways meet, so
@@ -1079,19 +1136,13 @@ class _BpmnBuilder:
                 self._add_flow(after_node, xg)
             # Each branch's step, and the nodes a flow into it can lead to: the
             # step itself, or the join before it when it depends on several.
-            # A branch to "end" means done, through the report and the delivery:
-            # with the agent's own steps for them, it leads into the first of them.
-            finish = self._own_finish_step(
-                dp.after, [br.target for br in dp.branches if br.target not in ("end", "")]
-            )
-            ids = [
-                finish if br.target in ("end", "") and finish else br.target for br in dp.branches
-            ]
             targets = [
-                "EndEvent_success" if sid in ("end", "") else self._lookup_node_for_step(sid)
-                for sid in ids
+                "EndEvent_success"
+                if br.target in ("end", "")
+                else self._lookup_node_for_step(br.target)
+                for br in dp.branches
             ]
-            entries = [self._entries_of(sid, tgt) for sid, tgt in zip(ids, targets)]
+            entries = [self._entries_of(br.target, tgt) for br, tgt in zip(dp.branches, targets)]
             outgoing = self._dissolve_fork(after_node, xg, outgoing, set().union(*entries))
             for br, tgt, entry in zip(dp.branches, targets, entries):
                 if not tgt:
@@ -1107,45 +1158,191 @@ class _BpmnBuilder:
                 if moved is not None:
                     outgoing.remove(moved)
                     moved.name = br.condition or moved.name
+                    flow = moved
                 else:
-                    self._add_flow(xg, tgt, name=br.condition)
+                    flow = self._add_flow(xg, tgt, name=br.condition)
+                if tgt == "EndEvent_success":
+                    self._end_branches.append((dp.id, xg, flow))
 
-    def _own_finish_step(self, after: str, branch_targets: List[str]) -> Optional[str]:
-        """The first of the agent's own report and send steps that comes after a
-        decision after ``after``: where its branch to "end" leads, so that the
-        case is still reported and delivered. A step comes after the decision when
-        it depends, directly or through other steps, on ``after`` or on one of
-        the decision's branch targets; one beside the decision (on another way of
-        a fork) or before it does not. None when there is no such step: the
-        branch then ends, and no loop back or second way into a step is drawn."""
-        own = set(self._own_report_steps()) | set(self._own_submission_steps())
+    # -- decision branches to "end" and the agent's own finishing steps ----
+
+    def _forward_graph(self) -> Tuple[Dict[str, List[str]], List[str]]:
+        """The drawn flows without the ways back, and the nodes in their order.
+
+        Loop flows are left out, and so is any flow back to a node on the way
+        to it from the start (a decision's rework branch is drawn as a plain
+        flow). Returns each node's forward successors and the nodes reached
+        from the start in topological order.
+        """
+        succ: Dict[str, List[str]] = {}
+        for f in self.flows:
+            if not f.is_loop:
+                succ.setdefault(f.src, []).append(f.tgt)
+        fwd: Dict[str, List[str]] = {}
+        state: Dict[str, int] = {"StartEvent_1": 1}
+        post: List[str] = []
+        stack = [("StartEvent_1", iter(succ.get("StartEvent_1", [])))]
+        while stack:
+            node, it = stack[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                state[node] = 2
+                post.append(node)
+                stack.pop()
+                continue
+            if state.get(nxt) == 1:
+                continue
+            fwd.setdefault(node, []).append(nxt)
+            if nxt not in state:
+                state[nxt] = 1
+                stack.append((nxt, iter(succ.get(nxt, []))))
+        return fwd, post[::-1]
+
+    @staticmethod
+    def _reach(fwd: Dict[str, List[str]], src: str, removed: Optional[str] = None) -> set:
+        """The nodes reached from ``src`` without passing ``removed``."""
+        seen, todo = set(), [src]
+        while todo:
+            n = todo.pop()
+            if n in seen or n == removed:
+                continue
+            seen.add(n)
+            todo.extend(fwd.get(n, []))
+        return seen
+
+    def _joins_after(self, fwd: Dict[str, List[str]], node: str) -> bool:
+        """A parallel join waits on the way on from ``node``: a token that
+        enters there alone would wait at it for ever."""
+        indeg: Dict[str, int] = {}
+        for outs in fwd.values():
+            for t in outs:
+                indeg[t] = indeg.get(t, 0) + 1
+        return any(
+            n != node
+            and self.nodes.get(n) is not None
+            and self.nodes[n].tag == "bpmn:parallelGateway"
+            and indeg.get(n, 0) > 1
+            for n in self._reach(fwd, node)
+        )
+
+    def _merge_before(self, node: str) -> str:
+        """An exclusive gateway in front of ``node`` that its forward flows, and
+        a decision's shortcut, meet at (one per node)."""
+        mid = f"Gateway_merge_{_safe(node)}"
+        if mid in self.nodes:
+            return mid
+        self.nodes[mid] = _Node(mid, "bpmn:exclusiveGateway", "", self.nodes[node].lane, "gateway")
+        self._map(mid, "merge_gateway", f"derived:merge_before:{node}")
+        for f in [f for f in self.flows if f.tgt == node and not f.is_loop]:
+            f.tgt = mid
+        self._add_flow(mid, node)
+        return mid
+
+    def _route_end_branches(self) -> None:
+        """A decision's branch to "end" means done, through the report and the
+        delivery. With the agent's own report or send steps there is no
+        generated box at the end that it would pass, so:
+
+        - It leads into the first of those steps (in the drawn order) that only
+          the decision leads to: every forward way from the start to it passes
+          the decision, so it is not running beside it on another way of a fork,
+          not before it, and not behind a join the shortcut would skip; and no
+          parallel join waits after it. The shortcut and the step's own way meet
+          at an exclusive gateway in front of the step.
+        - What the branch would still skip (the report or a submission that
+          only the decision's other branches pass) is drawn on the branch as a
+          generated box, so every successful path passes the report and each
+          submission once. With no step it can lead into, that is all of them.
+
+        An own step before the decision, or beside it, is passed anyway.
+        """
+        reports = [n for n in map(self._lookup_node_for_step, self._own_report_steps()) if n]
+        spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
+        sends: Dict[str, List[str]] = {}
+        for t in _as_list(spec.get("integration_targets")):
+            nodes = [n for n in map(self._lookup_node_for_step, self._own_submission_steps(str(t)))]
+            if any(nodes):
+                sends[str(t)] = [n for n in nodes if n]
+        own = set(reports).union(*sends.values())
         if not own:
-            return None
-        dependents: Dict[str, List[str]] = {}
-        for s in self.bp.workflow.steps:
-            for d in s.depends_on or []:
-                dependents.setdefault(d, []).append(s.id)
-        later, todo = set(), [after, *branch_targets]
-        while todo:
-            sid = todo.pop()
-            if sid in later:
+            return
+        # The last decision first: an earlier one's shortcut then sees the
+        # later one's branch to "end" already going through the own steps.
+        _, first_order = self._forward_graph()
+        rank = {n: i for i, n in enumerate(first_order)}
+        branches = sorted(self._end_branches, key=lambda b: -rank.get(b[1], -1))
+        for dp_id, xg, flow in branches:
+            if flow not in self.flows or flow.src != xg or flow.tgt != "EndEvent_success":
                 continue
-            later.add(sid)
-            todo.extend(dependents.get(sid, []))
-        # A branch back to an earlier step (rework) reaches steps before the
-        # decision too: those are passed already.
-        deps = {s.id: list(s.depends_on or []) for s in self.bp.workflow.steps}
-        before, todo = set(), [after]
-        while todo:
-            sid = todo.pop()
-            if sid in before:
+            fwd, order = self._forward_graph()
+            if xg not in order:
                 continue
-            before.add(sid)
-            todo.extend(deps.get(sid, []))
-        for s in self.bp.workflow.steps:
-            if s.id in own and s.id in later and s.id not in before:
-                return s.id
-        return None
+            not_via_xg = self._reach(fwd, "StartEvent_1", removed=xg)
+            after = {n for n in self._reach(fwd, xg) if n != xg and n not in not_via_xg}
+            entry = next(
+                (n for n in order if n in own and n in after and not self._joins_after(fwd, n)),
+                None,
+            )
+            passed = set()
+            if entry is not None:
+                # The own steps every way on from the entry to the end passes.
+                passed = {
+                    n
+                    for n in own
+                    if n == entry
+                    or (
+                        n in self._reach(fwd, entry)
+                        and "EndEvent_success" not in self._reach(fwd, entry, removed=n)
+                    )
+                }
+            need_report = (
+                bool(reports) and all(n in after for n in reports) and not (set(reports) & passed)
+            )
+            need_sends = [
+                t
+                for t, nodes in sends.items()
+                if all(n in after for n in nodes) and not (set(nodes) & passed)
+            ]
+            if entry is not None:
+                flow.tgt = self._merge_before(entry)
+            self._splice_branch_boxes(flow, dp_id, need_report, need_sends)
+
+    def _splice_branch_boxes(
+        self, flow: _Flow, dp_id: str, report: bool, targets: List[str]
+    ) -> None:
+        """The generated report and submission boxes on one decision branch."""
+        chain: List[str] = []
+        if report:
+            nid = f"Activity_generate_pdf_{_safe(dp_id)}"
+            self.nodes[nid] = _Node(
+                nid,
+                "bpmn:serviceTask",
+                "Generate PDF report",
+                self._lane_for_category("ai"),
+                "task",
+            )
+            self._map(nid, "pdf_generation", f"derived:pdf_output:branch:{dp_id}")
+            chain.append(nid)
+        for t in targets:
+            nid = f"Activity_submit_{_safe(t)}_{_safe(dp_id)}"
+            node = _Node(
+                nid,
+                "bpmn:sendTask",
+                f"Submit to {_humanize_token(t)}",
+                self._lane_for_category("ai"),
+                "task",
+            )
+            node.data_out.append((self._next_assoc_id(), f"DataStore_{_safe(t)}"))
+            self.nodes[nid] = node
+            self._map(nid, "send_task", f"derived:submit:{t}:branch:{dp_id}")
+            chain.append(nid)
+        if not chain:
+            return
+        end = flow.tgt
+        flow.tgt = chain[0]
+        for a, b in zip(chain, chain[1:]):
+            self._add_flow(a, b)
+        self._add_flow(chain[-1], end)
 
     def _new_decision_gateway(self, i: int, dp, beside: str) -> str:
         """The exclusive gateway a decision point is drawn as, in the lane of ``beside``."""
@@ -1502,6 +1699,7 @@ class _BpmnBuilder:
         self._enrich_decision_points()
         self._enrich_exceptions()
         self._settle_joins()
+        self._route_end_branches()
         # PDF generation is placed on the approved path *before* integration so
         # the order reads "generate the report -> submit it", and so a human
         # review approves the output before the PDF is rendered.

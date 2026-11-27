@@ -294,7 +294,8 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
     decision_steps = {_ref(s.get("id")) for s in steps if _text(s.get("type")) == "decision"}
     dependents: dict[str, set[str]] = {}
     for s in steps:
-        for dep in s.get("depends_on") or []:
+        deps = s.get("depends_on")
+        for dep in deps if isinstance(deps, list) else []:
             if isinstance(dep, str):
                 dependents.setdefault(dep, set()).add(_ref(s.get("id")))
     seen_after: set[str] = set()
@@ -368,7 +369,10 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
         outcome = _ref(path_item.get("outcome"))
         if outcome.startswith("loop_to:") and outcome.split(":", 1)[1].strip() not in step_ids:
             problems.append((path, name, f'outcome names no step: "{outcome}"'))
-    problems.extend(_own_report_and_submission_hints(data, steps))
+    try:
+        problems.extend(_own_report_and_submission_hints(data, steps))
+    except Exception:  # a hint never takes the decision and path problems with it
+        logger.warning("report and submission hints failed", exc_info=True)
     return problems
 
 
@@ -402,64 +406,39 @@ def _step_text(step: dict) -> str:
     return f"{_text(step.get('id'))} {_text(step.get('name'))}".replace("_", " ")
 
 
-def _marker(step: dict) -> str | None:
-    """The step's ``parameters.integration_target``, when it is a string."""
-    params = step.get("parameters")
-    marker = params.get("integration_target") if isinstance(params, dict) else None
-    return marker if isinstance(marker, str) and marker else None
-
-
 def _own_report_and_submission_hints(data: dict, steps: list[dict]) -> list[tuple[str, str, str]]:
     """Steps that look like the report or a submission but are not marked as one,
     and markers that name no integration target.
 
-    The diagram adds a "Generate PDF report" task unless a step outputs a
-    generated pdf/report artifact it produces (or, as before, a step's id or
-    component has "pdf" or "report_gen" in it), and a "Submit to …" task per
-    integration target unless a step names it exactly in
-    ``parameters.integration_target`` (solution_wizard's bpmn_generator). A step
-    the agent wrote for that work but did not mark is drawn beside a second,
-    generated one. These are hints, worded "if it does": a step is taken for the
-    report or a submission only by its id or name (an automated step that says it
-    writes a report, or sends to a word of the target), which can be wrong.
+    Whether the diagram adds a "Generate PDF report" task or a "Submit to …"
+    task is decided by the generator's own rules (``report_box_needed``,
+    ``submit_box_targets`` in solution_wizard's bpmn_generator), so a hint is
+    given only where the drawing has a second box. A step the agent wrote for
+    that work but did not mark is drawn beside the generated one. These are
+    hints, worded "if it does": a step is taken for the report or a submission
+    only by its id or name (an automated step that says it writes a report, or
+    sends to a word of the target), which can be wrong. Without solution_wizard
+    there is no diagram, and no hint.
     """
+    try:
+        from solution_wizard.bpmn_generator import (
+            integration_marker,
+            report_box_needed,
+            submit_box_targets,
+        )
+    except ImportError:  # pragma: no cover - optional in minimal installs
+        return []
     spec = data.get("technical_spec")
     spec = spec if isinstance(spec, dict) else {}
-    outputs = spec.get("output_types") or []
-    outputs = [outputs] if isinstance(outputs, str) else outputs
-    outputs = outputs if isinstance(outputs, list) else []
-    targets = [t for t in spec.get("integration_targets") or [] if isinstance(t, str) and t]
-    artifacts = data.get("artifacts")
-    artifacts = artifacts if isinstance(artifacts, dict) else {}
+    raw_targets = spec.get("integration_targets")
+    targets = [str(t) for t in raw_targets] if isinstance(raw_targets, list) else []
     automated = [(i, s) for i, s in enumerate(steps) if _text(s.get("type")) not in _PERSON_STEPS]
     hints: list[tuple[str, str, str]] = []
-
-    def writes_report(step: dict) -> bool:
-        outputs = step.get("outputs")
-        for art_id in outputs if isinstance(outputs, list) else []:
-            art = artifacts.get(art_id) if isinstance(art_id, str) else None
-            if (
-                isinstance(art, dict)
-                and _text(art.get("type")).lower() in ("pdf", "report")
-                and _text(art.get("source")).lower() == "generated"
-                and art.get("produced_by") == step.get("id")
-            ):
-                return True
-        return False
-
-    def named_report_generator(step: dict) -> bool:
-        ident = f"{_text(step.get('id'))} {_text(step.get('component'))}".lower()
-        return "pdf" in ident or "report_gen" in ident
 
     def name(step: dict) -> str:
         return _text(step.get("name")) or _text(step.get("id"))
 
-    adds_report = (
-        any(_text(o).lower() in ("pdf", "report") for o in outputs)
-        and not any(writes_report(s) for s in steps)
-        and not any(named_report_generator(s) for s in steps)
-    )
-    if adds_report:
+    if report_box_needed(data):
         found = [
             (i, s)
             for i, s in automated
@@ -472,14 +451,15 @@ def _own_report_and_submission_hints(data: dict, steps: list[dict]) -> list[tupl
                     f"workflow.steps[{i}]",
                     name(step),
                     "looks like the step that writes the PDF report: if it is, give it an "
-                    'output artifact of type "pdf" with source "generated" and produced_by '
-                    "this step, so the diagram does not add a second report",
+                    'output artifact of type "pdf" with source "generated", final_output '
+                    "true and produced_by this step, so the diagram does not add a second "
+                    "report",
                 )
             )
 
     exact = ", ".join(f'"{t}"' for t in targets)
     for i, step in enumerate(steps):
-        marker = _marker(step)
+        marker = integration_marker(step)
         if marker is not None and marker not in targets:
             hints.append(
                 (
@@ -493,15 +473,12 @@ def _own_report_and_submission_hints(data: dict, steps: list[dict]) -> list[tupl
                 )
             )
 
-    marked = {_marker(s) for s in steps}
-    for target in targets:
-        if target in marked:
-            continue
+    for target in submit_box_targets(data):
         words = _words(target) - _TARGET_STOPWORDS
         found = [
             (i, s)
             for i, s in automated
-            if _marker(s) is None
+            if integration_marker(s) is None
             and words & _words(_step_text(s))
             and _SEND_WORDS.search(_step_text(s))
         ]

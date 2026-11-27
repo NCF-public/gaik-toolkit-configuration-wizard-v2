@@ -6,10 +6,16 @@ report" task, and for each ``technical_spec.integration_targets`` entry a
 live run: ``invoice_pdf_report`` and ``erp_submission``, both
 ``component: custom``), the diagram showed the report and the submission twice.
 
-- The report: a step that outputs a *generated* artifact of type pdf or report
-  ``produced_by`` it. (An upload step's PDF is ``source: user_upload``.)
+- The report: a step that outputs a *generated* artifact of type pdf or report,
+  with ``final_output: true``, ``produced_by`` it. (An upload step's PDF is
+  ``source: user_upload``; an intermediate PDF is not the final output.)
 - The submission: a step whose ``parameters.integration_target`` is the
   target's exact name. Its data store stays, written by that step.
+- A decision's branch to "end" still passes the report and the submission once.
+
+The checks walk the drawn diagram as a case would run it (`_runs`): every
+choice at an exclusive gateway, every way out of a fork, a join waiting for
+all its ways. So a step entered twice, or a token left waiting, shows.
 """
 
 import xml.etree.ElementTree as ET
@@ -20,6 +26,7 @@ from solution_wizard.bpmn_generator import generate_bpmn
 NS = {"bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL"}
 END = "EndEvent_success"
 ERP = "ERP system (approved invoice data)"
+PDF = "Activity_generate_pdf"
 
 
 def _step(sid, kind="automated_task", deps=(), inputs=(), outputs=(), **extra):
@@ -37,6 +44,16 @@ def _step(sid, kind="automated_task", deps=(), inputs=(), outputs=(), **extra):
     return step
 
 
+def _send(sid, deps, target=ERP):
+    return _step(
+        sid,
+        deps=deps,
+        inputs=["record"],
+        outputs=[f"{sid}_receipt"],
+        parameters={"integration_target": target} if target else {},
+    )
+
+
 def _art(kind, by=None, *, upload=False, final=False):
     if upload:
         return {"type": kind, "source": "user_upload", "optional": False}
@@ -52,6 +69,10 @@ def _art(kind, by=None, *, upload=False, final=False):
 def _blueprint(
     steps, artifacts, *, targets=(ERP,), outputs=("structured_json", "pdf"), decisions=()
 ):
+    artifacts = dict(artifacts)
+    for s in steps:
+        for out in s["outputs"]:
+            artifacts.setdefault(out, _art("structured_json", s["id"]))
     return Blueprint.model_validate(
         {
             "blueprint_version": "1.0",
@@ -76,6 +97,15 @@ def _blueprint(
     )
 
 
+def _decision(did, after, *branches):
+    return {
+        "id": did,
+        "name": did,
+        "after": after,
+        "branches": [{"condition": c, "target": t} for c, t in branches],
+    }
+
+
 def _flows(bp):
     root = ET.fromstring(generate_bpmn(bp))
     proc = root.find("bpmn:process", NS)
@@ -93,115 +123,135 @@ def _flows(bp):
     return flows, kinds, writes
 
 
+def _runs(bp):
+    """Every way a case can run through the drawn diagram.
+
+    A token at an exclusive gateway with several ways takes each in turn (a way
+    back to a node the run has passed is rework, and is not taken); a task or a
+    fork sends a token down every way out; a parallel join fires when a token
+    has come in on each of its ways. Returns ``(nodes in the order passed,
+    nodes a token was left waiting at)`` for each run.
+    """
+    flows, kinds, _ = _flows(bp)
+    out, indeg = {}, {}
+    for a, b in flows:
+        out.setdefault(a, []).append(b)
+        indeg[b] = indeg.get(b, 0) + 1
+    runs = []
+
+    def go(pending, order, waiting):
+        while pending:
+            n = pending.pop(0)
+            kind = kinds[n]
+            if kind == "exclusiveGateway" and len(out.get(n, [])) > 1:
+                ways = [t for t in out[n] if t not in order]
+                if not ways:
+                    runs.append((order + [n], {f"no way on from {n}"}))
+                    return
+                for t in ways:
+                    go([t] + pending, order + [n], dict(waiting))
+                return
+            if kind == "parallelGateway" and indeg.get(n, 0) > 1:
+                waiting[n] = waiting.get(n, 0) + 1
+                if waiting[n] < indeg[n]:
+                    continue
+                waiting[n] = 0
+            order = order + [n]
+            if kind != "endEvent":
+                pending = pending + out.get(n, [])
+        runs.append((order, {n for n, c in waiting.items() if c}))
+
+    go(["StartEvent_1"], [], {})
+    return runs
+
+
+def _assert_each_finished_run_passes_once(bp, reports, sends):
+    """Every run that reaches the success end passes the report (an own report
+    step or a generated one) and the submission (an own send step or a
+    generated one) exactly once, and no run leaves a token waiting."""
+    runs = _runs(bp)
+    finished = [order for order, _ in runs if END in order]
+    assert finished, runs
+    for order, waiting in runs:
+        assert not waiting, (order, waiting)
+    for order in finished:
+        n_reports = sum(1 for n in order if n in reports or n.startswith(PDF))
+        n_sends = sum(1 for n in order if n in sends or n.startswith("Activity_submit_"))
+        assert n_reports == 1, order
+        assert n_sends == 1, order
+    return finished
+
+
 UPLOAD = _step("upload", "user_task", outputs=["invoice_pdf"])
 EXTRACT = _step("extract", deps=["upload"], inputs=["invoice_pdf"], outputs=["record"])
 BASE_ARTS = {"invoice_pdf": _art("pdf", upload=True), "record": _art("structured_json", "extract")}
 
 
-def _invoice(*, marker=ERP):
-    """Upload, extract and the agent's own send step, with no report step."""
-    params = {"integration_target": marker} if marker else {}
-    send = _step(
-        "send_erp", deps=["extract"], inputs=["record"], outputs=["erp_receipt"], parameters=params
-    )
-    arts = {**BASE_ARTS, "erp_receipt": _art("erp_submission", "send_erp", final=True)}
-    return _blueprint([UPLOAD, EXTRACT, send], arts)
+def _report(sid, deps):
+    return _step(sid, deps=deps, inputs=["record"], outputs=[f"{sid}_pdf"])
 
 
-def _paths(flows, start="StartEvent_1", end=END):
-    """Every path from the start to the success end, loops left out."""
-    out, nxt = [], {}
-    for a, b in flows:
-        nxt.setdefault(a, []).append(b)
+def _report_art(sid, final=True):
+    return {f"{sid}_pdf": _art("pdf", sid, final=final)}
 
-    def walk(node, seen):
-        if node == end:
-            out.append(seen)
-            return
-        for b in nxt.get(node, []):
-            if b not in seen:
-                walk(b, seen + [b])
 
-    walk(start, [start])
-    return out
+# -- the boxes ------------------------------------------------------------------
 
 
 def test_the_agents_own_report_and_submission_are_drawn_once():
     steps = [
         UPLOAD,
         EXTRACT,
-        _step("make_document", deps=["extract"], inputs=["record"], outputs=["report_pdf"]),
-        _step(
-            "deliver",
-            deps=["make_document"],
-            inputs=["record"],
-            outputs=["receipt"],
-            parameters={"integration_target": ERP},
-        ),
+        _report("make_document", ["extract"]),
+        _send("deliver", ["make_document"]),
     ]
-    arts = {
-        **BASE_ARTS,
-        "report_pdf": _art("pdf", "make_document", final=True),
-        "receipt": _art("erp_submission", "deliver", final=True),
-    }
-    flows, kinds, writes = _flows(_blueprint(steps, arts))
+    bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_document")})
+    flows, kinds, writes = _flows(bp)
 
-    assert "Activity_generate_pdf" not in kinds
+    assert PDF not in kinds
     assert not any(k.startswith("Activity_submit_") for k in kinds)
     assert ("Activity_make_document", "Activity_deliver") in flows
     assert ("Activity_deliver", END) in flows
     # The integration's data store stays, written by the agent's own step.
     store = next(k for k, v in kinds.items() if v == "dataStoreReference")
     assert store in writes["Activity_deliver"]
+    _assert_each_finished_run_passes_once(bp, {"Activity_make_document"}, {"Activity_deliver"})
 
 
 def test_without_own_steps_both_boxes_are_generated_report_first():
     flows, kinds, _ = _flows(_blueprint([UPLOAD, EXTRACT], dict(BASE_ARTS)))
 
-    assert ("Activity_extract", "Activity_generate_pdf") in flows
+    assert ("Activity_extract", PDF) in flows
     send = next(k for k in kinds if k.startswith("Activity_submit_"))
-    assert ("Activity_generate_pdf", send) in flows
+    assert (PDF, send) in flows
     assert (send, END) in flows
 
 
 def test_an_own_report_step_without_a_submission_gets_the_generated_send_after_it():
-    steps = [
-        UPLOAD,
-        EXTRACT,
-        _step("make_document", deps=["extract"], inputs=["record"], outputs=["report_pdf"]),
-    ]
-    arts = {**BASE_ARTS, "report_pdf": _art("pdf", "make_document", final=True)}
-    flows, kinds, _ = _flows(_blueprint(steps, arts))
+    steps = [UPLOAD, EXTRACT, _report("make_document", ["extract"])]
+    flows, kinds, _ = _flows(_blueprint(steps, {**BASE_ARTS, **_report_art("make_document")}))
 
-    assert "Activity_generate_pdf" not in kinds
+    assert PDF not in kinds
     send = next(k for k in kinds if k.startswith("Activity_submit_"))
     assert ("Activity_make_document", send) in flows
 
 
-def test_an_own_submission_without_a_report_gets_the_generated_report_before_it():
-    flows, kinds, _ = _flows(_invoice())
+def test_an_own_submission_without_a_report_gets_the_generated_report_at_the_end():
+    """The generated report stays where it always was, on the one way into the
+    end, so after the agent's own send step."""
+    bp = _blueprint([UPLOAD, EXTRACT, _send("send_erp", ["extract"])], BASE_ARTS)
+    flows, kinds, _ = _flows(bp)
 
     assert not any(k.startswith("Activity_submit_") for k in kinds)
-    assert ("Activity_extract", "Activity_generate_pdf") in flows
-    assert ("Activity_generate_pdf", "Activity_send_erp") in flows
-    assert ("Activity_send_erp", END) in flows
+    assert ("Activity_extract", "Activity_send_erp") in flows
+    assert ("Activity_send_erp", PDF) in flows
+    assert (PDF, END) in flows
 
 
 def test_a_marker_for_one_of_two_targets_keeps_the_other_targets_box():
-    steps = [
-        UPLOAD,
-        EXTRACT,
-        _step(
-            "deliver",
-            deps=["extract"],
-            inputs=["record"],
-            outputs=["receipt"],
-            parameters={"integration_target": ERP},
-        ),
-    ]
-    arts = {**BASE_ARTS, "receipt": _art("erp_submission", "deliver")}
+    steps = [UPLOAD, EXTRACT, _send("deliver", ["extract"])]
     flows, kinds, _ = _flows(
-        _blueprint(steps, arts, targets=(ERP, "archive_system"), outputs=("structured_json",))
+        _blueprint(steps, BASE_ARTS, targets=(ERP, "archive_system"), outputs=("structured_json",))
     )
 
     sends = [k for k in kinds if k.startswith("Activity_submit_")]
@@ -209,196 +259,291 @@ def test_a_marker_for_one_of_two_targets_keeps_the_other_targets_box():
 
 
 def test_a_marker_naming_no_target_is_not_taken_for_the_submission():
-    flows, kinds, _ = _flows(_invoice(marker="erp"))
+    bp = _blueprint([UPLOAD, EXTRACT, _send("send_erp", ["extract"], target="erp")], BASE_ARTS)
+    _, kinds, _ = _flows(bp)
 
     assert any(k.startswith("Activity_submit_") for k in kinds)
 
 
 def test_an_upload_steps_pdf_is_not_taken_for_the_report():
-    steps = [UPLOAD, EXTRACT]
-    flows, kinds, _ = _flows(_blueprint(steps, dict(BASE_ARTS), targets=()))
+    _, kinds, _ = _flows(_blueprint([UPLOAD, EXTRACT], dict(BASE_ARTS), targets=()))
 
-    assert "Activity_generate_pdf" in kinds
+    assert PDF in kinds
+
+
+def test_an_intermediate_pdf_is_not_taken_for_the_final_report():
+    """A normalised PDF that the review then reads is not the report: the
+    generated report is still drawn after approval."""
+    steps = [
+        UPLOAD,
+        _step("normalise", deps=["upload"], inputs=["invoice_pdf"], outputs=["clean_pdf"]),
+        _step("extract", deps=["normalise"], inputs=["clean_pdf"], outputs=["record"]),
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+    ]
+    arts = {**BASE_ARTS, "clean_pdf": _art("pdf", "normalise", final=False)}
+    bp = _blueprint(steps, arts, targets=())
+    flows, kinds, _ = _flows(bp)
+
+    assert PDF in kinds
+    runs = _runs(bp)
+    assert all(not w for _, w in runs)
+    finished = [o for o, _ in runs if END in o]
+    assert finished
+    for order in finished:
+        assert order.index("Activity_review") < order.index(PDF)
 
 
 def test_an_own_report_on_one_branch_only_is_trusted_and_nothing_is_generated():
     """What the agent wrote is drawn: a report on the manager's branch only is not
-    copied onto the other branch."""
+    copied onto the other branch, and both branches still finish."""
     steps = [
         UPLOAD,
         EXTRACT,
         _step("route", deps=["extract"]),
         _step("manager", "user_task", deps=["route"]),
-        _step("make_document", deps=["manager"], inputs=["record"], outputs=["report_pdf"]),
+        _report("make_document", ["manager"]),
         _step("archive", deps=["route"]),
     ]
-    arts = {**BASE_ARTS, "report_pdf": _art("pdf", "make_document", final=True)}
-    decision = {
-        "id": "big",
-        "name": "Big?",
-        "after": "route",
-        "branches": [
-            {"condition": "yes", "target": "manager"},
-            {"condition": "no", "target": "archive"},
-        ],
-    }
-    flows, kinds, _ = _flows(_blueprint(steps, arts, targets=(), decisions=[decision]))
+    decision = _decision("big", "route", ("yes", "manager"), ("no", "archive"))
+    bp = _blueprint(
+        steps, {**BASE_ARTS, **_report_art("make_document")}, targets=(), decisions=[decision]
+    )
+    _, kinds, _ = _flows(bp)
 
-    assert "Activity_generate_pdf" not in kinds
-    paths = _paths(flows)
-    # Both branches still finish: one through the report, one past it.
-    assert any("Activity_make_document" in p for p in paths)
-    assert any("Activity_archive" in p and "Activity_make_document" not in p for p in paths)
+    assert PDF not in kinds
+    runs = _runs(bp)
+    assert all(not waiting for _, waiting in runs)
+    finished = [o for o, _ in runs if END in o]
+    assert any("Activity_make_document" in o for o in finished)
+    assert any("Activity_archive" in o and "Activity_make_document" not in o for o in finished)
 
 
-def _passes(path, node):
-    return path.count(node)
+# -- a decision's branch to "end" -------------------------------------------------
 
 
 def test_a_branch_to_end_goes_through_the_agents_own_report_and_submission():
-    """The auto-approval shape: a branch to "end" means done through the report and
-    the delivery, so with the agent's own steps it leads into them, not past them."""
+    """The auto-approval shape: "small" goes to "end", "big" to the review; both
+    finish through the agent's report and send steps, which the shortcut enters
+    at an exclusive gateway."""
     steps = [
         UPLOAD,
         EXTRACT,
         _step("review", "human_review", deps=["extract"], inputs=["record"]),
-        _step("make_doc", deps=["review"], inputs=["record"], outputs=["report_pdf"]),
-        _step(
-            "deliver",
-            deps=["make_doc"],
-            inputs=["record"],
-            outputs=["receipt"],
-            parameters={"integration_target": ERP},
-        ),
+        _report("make_doc", ["review"]),
+        _send("deliver", ["make_doc"]),
     ]
-    arts = {
-        **BASE_ARTS,
-        "report_pdf": _art("pdf", "make_doc", final=True),
-        "receipt": _art("erp_submission", "deliver", final=True),
-    }
-    decision = {
-        "id": "auto",
-        "name": "Small invoice?",
-        "after": "extract",
-        "branches": [
-            {"condition": "small", "target": "end"},
-            {"condition": "big", "target": "review"},
-        ],
-    }
-    flows, kinds, _ = _flows(_blueprint(steps, arts, decisions=[decision]))
+    decision = _decision("auto", "extract", ("small", "end"), ("big", "review"))
+    bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
+    flows, kinds, _ = _flows(bp)
 
-    paths = _paths(flows)
-    assert len(paths) >= 2
-    for path in paths:
-        assert _passes(path, "Activity_make_doc") == 1, path
-        assert _passes(path, "Activity_deliver") == 1, path
-    assert any("Activity_review" not in p for p in paths)
+    finished = _assert_each_finished_run_passes_once(
+        bp, {"Activity_make_doc"}, {"Activity_deliver"}
+    )
+    assert any("Activity_review" not in o for o in finished)
+    merge = "Gateway_merge_Activity_make_doc"
+    assert kinds[merge] == "exclusiveGateway"
+    assert ("Gateway_decision_auto", merge) in flows
+    assert (merge, "Activity_make_doc") in flows
+
+
+def test_a_send_step_listed_before_the_report_is_not_entered_first():
+    """The step the shortcut enters is the first in the drawn order, not in the
+    workflow's list."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _send("deliver", ["make_doc"]),
+        _report("make_doc", ["review"]),
+    ]
+    decision = _decision("auto", "extract", ("small", "end"), ("big", "review"))
+    bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
+    flows, _, _ = _flows(bp)
+
+    assert ("Gateway_decision_auto", "Gateway_merge_Activity_deliver") not in flows
+    _assert_each_finished_run_passes_once(bp, {"Activity_make_doc"}, {"Activity_deliver"})
 
 
 def test_a_branch_to_end_after_the_own_steps_still_ends():
-    """A decision after the agent's own send step: its branch to "end" ends, so no
-    loop back into the step is drawn."""
-    steps = [
-        UPLOAD,
-        EXTRACT,
-        _step(
-            "deliver",
-            deps=["extract"],
-            inputs=["record"],
-            outputs=["receipt"],
-            parameters={"integration_target": ERP},
-        ),
-        _step("notify", deps=["deliver"]),
-    ]
-    arts = {**BASE_ARTS, "receipt": _art("erp_submission", "deliver", final=True)}
-    decision = {
-        "id": "tell",
-        "name": "Notify?",
-        "after": "deliver",
-        "branches": [
-            {"condition": "no", "target": "end"},
-            {"condition": "yes", "target": "notify"},
-        ],
-    }
-    flows, _, _ = _flows(
-        _blueprint(steps, arts, outputs=("structured_json",), decisions=[decision])
-    )
+    steps = [UPLOAD, EXTRACT, _send("deliver", ["extract"]), _step("notify", deps=["deliver"])]
+    decision = _decision("tell", "deliver", ("no", "end"), ("yes", "notify"))
+    bp = _blueprint(steps, BASE_ARTS, outputs=("structured_json",), decisions=[decision])
+    flows, _, _ = _flows(bp)
 
     assert ("Gateway_decision_tell", END) in flows
-    assert ("Gateway_decision_tell", "Activity_deliver") not in flows
+    runs = _runs(bp)
+    assert all(not w for _, w in runs)
+    for order in (o for o, _ in runs if END in o):
+        assert order.count("Activity_deliver") == 1
 
 
-def test_the_generated_report_goes_between_the_join_and_the_own_send_step():
+def test_a_branch_to_end_beside_an_own_report_on_another_way_of_a_fork():
+    """The report runs beside the decision (both follow a fork): it is passed
+    anyway, so the branch ends and the report is entered once."""
     steps = [
         UPLOAD,
         EXTRACT,
-        _step("classify", deps=["upload"], inputs=["invoice_pdf"], outputs=["label"]),
-        _step(
-            "deliver",
-            deps=["extract", "classify"],
-            inputs=["record"],
-            outputs=["receipt"],
-            parameters={"integration_target": ERP},
-        ),
-    ]
-    arts = {
-        **BASE_ARTS,
-        "label": _art("structured_json", "classify"),
-        "receipt": _art("erp_submission", "deliver", final=True),
-    }
-    flows, kinds, _ = _flows(_blueprint(steps, arts))
-
-    join = "Gateway_join_deliver"
-    assert (join, "Activity_generate_pdf") in flows
-    assert ("Activity_generate_pdf", "Activity_deliver") in flows
-    assert ("Activity_extract", join) in flows
-    assert ("Activity_classify", join) in flows
-
-
-def test_a_branch_to_end_is_not_led_into_an_own_step_beside_the_decision():
-    """The report runs beside the step the decision is after (both follow a fork):
-    the decision's branch to "end" ends, and the report is entered once."""
-    steps = [
-        UPLOAD,
-        EXTRACT,
-        _step("make_doc", deps=["extract"], inputs=["record"], outputs=["report_pdf"]),
+        _report("make_doc", ["extract"]),
         _step("notify", deps=["extract"]),
         _step("escalate", deps=["notify"]),
     ]
-    arts = {**BASE_ARTS, "report_pdf": _art("pdf", "make_doc", final=True)}
-    decision = {
-        "id": "esc",
-        "name": "Escalate?",
-        "after": "notify",
-        "branches": [
-            {"condition": "no", "target": "end"},
-            {"condition": "yes", "target": "escalate"},
-        ],
-    }
-    flows, _, _ = _flows(_blueprint(steps, arts, targets=(), decisions=[decision]))
+    decision = _decision("esc", "notify", ("no", "end"), ("yes", "escalate"))
+    bp = _blueprint(
+        steps, {**BASE_ARTS, **_report_art("make_doc")}, targets=(), decisions=[decision]
+    )
+    flows, _, _ = _flows(bp)
 
-    assert ("Gateway_decision_esc", "Activity_make_doc") not in flows
-    assert sum(1 for _, b in flows if b == "Activity_make_doc") == 1
+    assert not any(a == "Gateway_decision_esc" and "make_doc" in b for a, b in flows)
+    for order in (o for o, _ in _runs(bp) if END in o):
+        assert order.count("Activity_make_doc") == 1
 
 
-def test_a_rework_branch_does_not_lead_end_into_a_report_before_the_decision():
+def test_a_rework_branch_does_not_lead_end_into_a_report_beside_the_decision():
+    """extract forks into check and report → send; a decision after check has
+    done → end and rework → extract. Following the rework branch reaches the
+    report, but it runs beside the decision: done ends."""
     steps = [
         UPLOAD,
         EXTRACT,
-        _step("make_doc", deps=["extract"], inputs=["record"], outputs=["report_pdf"]),
-        _step("check", deps=["make_doc"]),
+        _step("check", deps=["extract"]),
+        _report("make_doc", ["extract"]),
+        _send("deliver", ["make_doc"]),
     ]
-    arts = {**BASE_ARTS, "report_pdf": _art("pdf", "make_doc", final=True)}
-    decision = {
-        "id": "ok",
-        "name": "Fine?",
-        "after": "check",
-        "branches": [
-            {"condition": "yes", "target": "end"},
-            {"condition": "no", "target": "extract"},
-        ],
-    }
-    flows, _, _ = _flows(_blueprint(steps, arts, targets=(), decisions=[decision]))
+    decision = _decision("ok", "check", ("done", "end"), ("rework", "extract"))
+    bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
+    flows, _, _ = _flows(bp)
 
     assert ("Gateway_decision_ok", END) in flows
-    assert ("Gateway_decision_ok", "Activity_make_doc") not in flows
+    assert not any(a == "Gateway_decision_ok" and "make_doc" in b for a, b in flows)
+    _assert_each_finished_run_passes_once(bp, {"Activity_make_doc"}, {"Activity_deliver"})
+
+
+def test_a_rework_branch_does_not_lead_end_into_a_report_before_the_decision():
+    steps = [UPLOAD, EXTRACT, _report("make_doc", ["extract"]), _step("check", deps=["make_doc"])]
+    decision = _decision("ok", "check", ("yes", "end"), ("no", "extract"))
+    bp = _blueprint(
+        steps, {**BASE_ARTS, **_report_art("make_doc")}, targets=(), decisions=[decision]
+    )
+    flows, _, _ = _flows(bp)
+
+    assert ("Gateway_decision_ok", END) in flows
+    assert not any(a == "Gateway_decision_ok" and "make_doc" in b for a, b in flows)
+
+
+def test_two_decisions_draw_no_cycle_through_the_shortcut():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("check", deps=["extract"]),
+        _report("make_doc", ["check"]),
+        _step("verify", deps=["make_doc"]),
+        _send("deliver", ["verify"]),
+    ]
+    decisions = [
+        _decision("first", "check", ("done", "end"), ("go", "make_doc")),
+        _decision("second", "verify", ("fine", "end"), ("again", "check")),
+    ]
+    bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=decisions)
+
+    _assert_each_finished_run_passes_once(bp, {"Activity_make_doc"}, {"Activity_deliver"})
+
+
+def test_a_shortcut_does_not_skip_a_join_that_waits_for_another_way():
+    """fork(review, verify); check after the review; the report waits for check
+    and verify. A decision after the approval must not send "finish" into the
+    report past the join that waits for verify."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _step("verify", deps=["extract"]),
+        _step("check", deps=["review"]),
+        _report("make_doc", ["check", "verify"]),
+    ]
+    decision = _decision("more", "review", ("finish", "end"), ("more", "check"))
+    bp = _blueprint(
+        steps, {**BASE_ARTS, **_report_art("make_doc")}, targets=(), decisions=[decision]
+    )
+    flows, _, _ = _flows(bp)
+
+    assert not any(a == "Gateway_decision_more" and "make_doc" in b for a, b in flows)
+
+
+def test_a_join_after_the_only_own_step_draws_the_report_on_the_branch():
+    """The report runs beside another step after the decision and a join waits
+    for both: the shortcut cannot enter it, so the branch gets a generated
+    report of its own."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _report("make_doc", ["review"]),
+        _step("archive", deps=["review"]),
+        _step("close", deps=["make_doc", "archive"]),
+    ]
+    decision = _decision("auto", "extract", ("small", "end"), ("big", "review"))
+    bp = _blueprint(
+        steps, {**BASE_ARTS, **_report_art("make_doc")}, targets=(), decisions=[decision]
+    )
+    runs = _runs(bp)
+    assert all(not w for _, w in runs)
+    finished = [o for o, _ in runs if END in o]
+    assert finished
+    for order in finished:
+        n = sum(1 for x in order if x == "Activity_make_doc" or x.startswith(PDF))
+        assert n == 1, order
+    assert any(any(x.startswith(PDF + "_") for x in o) for o in finished)
+
+
+def test_what_the_shortcut_cannot_pass_is_generated_on_it():
+    """The report and the send step are on the decision's two other branches:
+    the shortcut enters one of them and gets the other as a generated box."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("route", deps=["extract"]),
+        _report("make_doc", ["route"]),
+        _send("deliver", ["route"]),
+    ]
+    decision = _decision("way", "route", ("doc", "make_doc"), ("send", "deliver"), ("none", "end"))
+    bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
+    runs = _runs(bp)
+    assert all(not w for _, w in runs)
+    finished = [o for o, _ in runs if END in o]
+    assert len(finished) == 3
+    generated = [
+        o
+        for o in finished
+        if any(x.startswith(("Activity_generate_pdf_", "Activity_submit_")) for x in o)
+    ]
+    assert len(generated) == 1
+    (none_run,) = generated
+    reports = [x for x in none_run if x == "Activity_make_doc" or x.startswith(PDF)]
+    sends = [x for x in none_run if x == "Activity_deliver" or x.startswith("Activity_submit_")]
+    assert len(reports) == 1 and len(sends) == 1, none_run
+
+
+def test_two_marked_senders_on_two_branches_both_pass_the_generated_report():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _send("send_small", ["extract"]),
+        _send("send_large", ["extract"]),
+    ]
+    decision = _decision("size", "extract", ("small", "send_small"), ("large", "send_large"))
+    bp = _blueprint(steps, BASE_ARTS, decisions=[decision])
+
+    _assert_each_finished_run_passes_once(bp, set(), {"Activity_send_small", "Activity_send_large"})
+
+
+def test_a_marked_sender_before_the_review_leaves_the_report_after_approval():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _send("send_erp", ["extract"]),
+        _step("review", "human_review", deps=["send_erp"], inputs=["record"]),
+    ]
+    bp = _blueprint(steps, BASE_ARTS)
+
+    for order in _assert_each_finished_run_passes_once(bp, set(), {"Activity_send_erp"}):
+        assert order.index("Activity_review") < order.index(PDF)
