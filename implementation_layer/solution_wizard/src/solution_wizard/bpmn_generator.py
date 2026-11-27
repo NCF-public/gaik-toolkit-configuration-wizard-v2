@@ -27,6 +27,7 @@ Public API mirrors ``visualizer.py``:
 from __future__ import annotations
 
 import re
+from collections.abc import Set
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -425,8 +426,9 @@ class _BpmnBuilder:
         self._dataobj_ref_for_artifact: Dict[str, str] = {}
         # exception ids consumed by _enrich_approval (discard path); skipped by _enrich_exceptions
         self._consumed_exception_ids: set = set()
-        # integration target -> the id of the "Submit to …" task drawn for it
-        self._send_task_of: Dict[str, str] = {}
+        # Data store -> actual sender node used to position it.
+        self._store_anchor_of: dict[str, str] = {}
+        self._own_delivery_nodes: list[set[str]] = []
         # set when the "Generate PDF report" task is added
         self._generated_pdf = False
 
@@ -449,11 +451,9 @@ class _BpmnBuilder:
         return f"Property_{self._prop_seq}"
 
     def _free_id(self, base: str) -> str:
-        """``base``, or ``base_2``, ``base_3`` … when a node already has it: a
-        generated task never takes the id of a step drawn as ``Activity_<id>``
-        (a step ``submit_erp`` beside a target ``erp``)."""
+        """Keep the usual id unless a drawn element already uses it."""
         nid, n = base, 2
-        while nid in self.nodes:
+        while nid in self.nodes or nid in self.mapping:
             nid, n = f"{base}_{n}", n + 1
         return nid
 
@@ -996,14 +996,20 @@ class _BpmnBuilder:
                 out.append(step["id"])
         return out
 
-    def _enrich_integration(self) -> None:
+    def _enrich_integration(self, reports: set[str]) -> None:
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
         targets = spec.get("integration_targets") or []
         if not targets:
             return
+        approvals = set(self._approval_gateways)
+        requirements = reports | approvals
+        before_report = self._reachable("StartEvent_1", without=reports) if reports else set()
+        after_rejection: set[str] = set()
+        for flow in self.flows:
+            if flow.src in approvals and flow.is_loop:
+                after_rejection.update(self._reachable(flow.tgt, skip_approval=True))
         for idx, target in enumerate(targets):
-            own = self._own_submission_steps(str(target))
-            ds_id = f"DataStore_{_safe(target)}"
+            ds_id = self._free_id(f"DataStore_{_safe(target)}")
             ds_name = _humanize_token(target)
             # Persistent repositories use clean names (e.g. "Incident Reporting Database").
             if not ds_name.lower().endswith(("database", "repository", "system", "store")):
@@ -1013,21 +1019,24 @@ class _BpmnBuilder:
             self.data_stores.append((ds_id, ds_label, target))
             self._map(ds_id, "data_store", f"technical_spec.integration_targets[{idx}]")
 
-            own_nodes = [n for n in map(self._lookup_node_for_step, own) if n]
-            if own_nodes and not self._generated_pdf and self._passes_every_way(own_nodes):
-                # The agent's own steps send to this target on every way to the
-                # success end, and no generated report would follow them: they
-                # write the data store, and no "Submit to …" task is added.
-                # Otherwise the task is added as before, at the end, after the
-                # generated report.
-                for sid in own:
-                    node = self._lookup_node_for_step(sid)
-                    if node:
-                        self.nodes[node].data_out.append((self._next_assoc_id(), ds_id))
+            own_nodes = self._step_nodes(self._own_submission_steps(str(target)))
+            # An auto-approved path can bypass a review. A sender can stand in
+            # for the fallback only after any required report, and once no review
+            # follows it and no rejected path reaches it without a new approval.
+            after_requirements = {
+                node
+                for node in own_nodes - before_report - after_rejection
+                if not requirements or not self._reachable(node) & requirements
+            }
+            if not self._generated_pdf and self._passes_every_way(after_requirements):
+                self._own_delivery_nodes.append(after_requirements)
+                self._store_anchor_of[ds_id] = min(after_requirements)
+                for node in sorted(after_requirements):
+                    self.nodes[node].data_out.append((self._next_assoc_id(), ds_id))
                 continue
 
             send_id = self._free_id(f"Activity_submit_{_safe(target)}")
-            self._send_task_of[str(target)] = send_id
+            self._store_anchor_of[ds_id] = send_id
             send_node = _Node(
                 send_id,
                 "bpmn:sendTask",
@@ -1054,7 +1063,7 @@ class _BpmnBuilder:
 
     # -- enrichment: PDF generation service task --------------------------
 
-    def _enrich_pdf_generation(self) -> None:
+    def _enrich_pdf_generation(self, reports: set[str]) -> None:
         """When `output_types` includes 'pdf' and no explicit PDF-generation step
         exists in the workflow, inject a synthetic service task in the GAIK AI lane
         labelled 'Generate PDF report'.
@@ -1084,8 +1093,7 @@ class _BpmnBuilder:
             return
         if named_report_step(self._step_dicts()):
             return
-        own = [n for n in map(self._lookup_node_for_step, self._own_report_steps()) if n]
-        if self._passes_every_way(own):
+        if self._passes_every_way(reports):
             return
         self._generated_pdf = True
 
@@ -1165,26 +1173,72 @@ class _BpmnBuilder:
 
     # -- the agent's own report and send steps: on every way to the end? --
 
-    def _passes_every_way(self, nodes: List[str]) -> bool:
+    def _step_nodes(self, step_ids: list[str]) -> set[str]:
+        return {node for node in map(self._lookup_node_for_step, step_ids) if node}
+
+    def _reachable(
+        self,
+        start: str,
+        *,
+        without: Set[str] = frozenset(),
+        skip_approval: bool = False,
+    ) -> set[str]:
+        """All nodes reachable over the drawn flows, including rework."""
+        successors: dict[str, list[str]] = {}
+        for flow in self.flows:
+            if skip_approval and flow.src in self._approval_gateways and flow.name == "Yes":
+                continue
+            successors.setdefault(flow.src, []).append(flow.tgt)
+        seen, todo = set(), [start]
+        while todo:
+            node = todo.pop()
+            if node in seen or node in without:
+                continue
+            seen.add(node)
+            todo.extend(successors.get(node, []))
+        return seen
+
+    def _passes_every_way(self, nodes: set[str]) -> bool:
         """Every way from the start to the success end passes one of ``nodes``:
         with them taken out, the success end cannot be reached over the drawn
         flows (all of them, loops and rework ways too; a visited set handles the
         cycles). A way that skips them all, such as a decision's branch to "end"
         past them, another branch of a fork, or a choice that reaches the rest of
         the process past them, makes this false."""
-        if not nodes:
-            return False
-        succ: Dict[str, List[str]] = {}
-        for f in self.flows:
-            succ.setdefault(f.src, []).append(f.tgt)
-        seen, todo = set(), ["StartEvent_1"]
-        while todo:
-            n = todo.pop()
-            if n in seen or n in nodes:
-                continue
-            seen.add(n)
-            todo.extend(succ.get(n, []))
-        return "EndEvent_success" not in seen
+        return bool(nodes) and "EndEvent_success" not in self._reachable(
+            "StartEvent_1", without=nodes
+        )
+
+    def _map_done_choices(self, reports: set[str]) -> None:
+        """Tell the canvas what the agent's own finishing steps already cover.
+
+        An edit can add a direct path to success. Only promise an action is
+        complete if every path to this anchor passes it, including the anchor
+        itself. Otherwise the dialog describes the fallback conditionally.
+        """
+        spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
+        skipped_by_action: dict[str, set[str]] = {}
+        if wants_report(spec.get("output_types")) and self._passes_every_way(reports):
+            skipped_by_action["done_report"] = self._reachable("StartEvent_1", without=reports)
+        if self._own_delivery_nodes:
+            skipped_by_action["done_delivery"] = set().union(
+                *(
+                    self._reachable("StartEvent_1", without=nodes)
+                    for nodes in self._own_delivery_nodes
+                )
+            )
+        if not skipped_by_action:
+            return
+        reachable = self._reachable("StartEvent_1")
+        for node, entry in self.mapping.items():
+            if node in reachable and (
+                entry["blueprint_path"].startswith("workflow.steps[")
+                or entry["kind"] == "decision_point"
+            ):
+                entry.update(
+                    (key, "conditional" if node in skipped else "complete")
+                    for key, skipped in skipped_by_action.items()
+                )
 
     def _new_decision_gateway(self, i: int, dp, beside: str) -> str:
         """The exclusive gateway a decision point is drawn as, in the lane of ``beside``."""
@@ -1498,17 +1552,21 @@ class _BpmnBuilder:
                         h_obj,
                     )
 
-        # data stores: directly below their send task, beneath the pool
+        # Data stores: below their sender and the pool, stacking when senders
+        # for different destinations share the same column.
         w_ds, h_ds = SIZE["dataStore"]
         pool_bottom = POOL_Y + pool_height
-        for ds_id, ds_name, target in self.data_stores:
-            send_id = self._send_task_of.get(str(target), "")
+        store_rows: dict[float, int] = {}
+        for ds_id, _, _ in self.data_stores:
+            send_id = self._store_anchor_of.get(ds_id, "")
             if send_id in self.bounds:
                 sx, sy, sw, sh = self.bounds[send_id]
                 cx = sx + sw / 2
             else:
                 cx = CONTENT_X0 + w_ds
-            self.bounds[ds_id] = (cx - w_ds / 2, pool_bottom + 30, w_ds, h_ds)
+            row = store_rows.get(cx, 0)
+            store_rows[cx] = row + 1
+            self.bounds[ds_id] = (cx - w_ds / 2, pool_bottom + 30 + row * (h_ds + 12), w_ds, h_ds)
 
         # annotations: a notes column just to the right of the pool
         w_an, h_an = SIZE["annotation"]
@@ -1544,8 +1602,10 @@ class _BpmnBuilder:
         # PDF generation is placed on the approved path *before* integration so
         # the order reads "generate the report -> submit it", and so a human
         # review approves the output before the PDF is rendered.
-        self._enrich_pdf_generation()
-        self._enrich_integration()
+        reports = self._step_nodes(self._own_report_steps())
+        self._enrich_pdf_generation(reports)
+        self._enrich_integration(reports)
+        self._map_done_choices(reports)
         if self.include_data_objects:
             self._build_data_objects()
         self._build_external_parties()

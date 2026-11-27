@@ -44,6 +44,9 @@ export type ExceptionRef = { id: string; name: string; attached_to: string; cond
 /** A data object (`artifacts.<id>`), as the mapping names it: `label` is "" when the generator names it. */
 export type DataObjectRef = { id: string; label: string };
 
+/** A finishing action covered by the workflow's own steps in the current diagram. */
+export type DoneWork = "complete" | "conditional";
+
 export type BpmnMapping = Record<
   string,
   {
@@ -62,6 +65,9 @@ export type BpmnMapping = Record<
     exception?: ExceptionRef;
     /** A data object's: its artifact. */
     data_object?: DataObjectRef;
+    /** Finishing actions already complete at this anchor, or dependent on the branch. */
+    done_report?: DoneWork;
+    done_delivery?: DoneWork;
   }
 >;
 

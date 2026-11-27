@@ -55,10 +55,15 @@ def test_the_agents_submission_marker_reaches_the_reduced_blueprints_step():
 
 
 def test_the_reduced_diagram_draws_no_submit_task_beside_the_agents_step():
-    xml, _, _ = bpmn_service.generate_bpmn_view(V2, session_id="s", agent_draft=DRAFT)
+    xml, mapping, drawn_from = bpmn_service.generate_bpmn_view(
+        V2, session_id="s", agent_draft=DRAFT
+    )
 
     assert "Activity_submit_erp_system" not in xml
     assert 'id="Activity_send_erp"' in xml
+    named = bpmn_service.named_mapping(mapping, drawn_from)
+    assert named["Activity_extract"]["done_delivery"] == "conditional"
+    assert named["Activity_send_erp"]["done_delivery"] == "complete"
 
 
 def test_parameters_that_are_not_an_object_keep_the_rest_of_the_agents_process():

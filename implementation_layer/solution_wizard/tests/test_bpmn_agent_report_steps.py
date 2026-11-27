@@ -449,6 +449,86 @@ def test_a_marked_sender_before_the_review_leaves_the_report_after_approval():
         assert order.index("Activity_review") < order.index(PDF)
 
 
+def test_a_sender_before_approval_keeps_the_generated_sender():
+    review = _step("review", "human_review", deps=["deliver"], inputs=["record"])
+    bp = _blueprint(
+        [UPLOAD, EXTRACT, _send("deliver", ["extract"]), review],
+        BASE_ARTS,
+        outputs=("structured_json",),
+    )
+    flows, kinds, _ = _flows(bp)
+    (sender,) = [node for node, kind in kinds.items() if kind == "sendTask"]
+    assert ("Gateway_approve_review", sender) in flows
+
+
+def test_a_sender_before_the_own_report_keeps_the_generated_sender():
+    bp = _blueprint(
+        [UPLOAD, EXTRACT, _send("deliver", ["extract"]), _report("make_doc", ["deliver"])],
+        {**BASE_ARTS, **_report_art("make_doc")},
+    )
+    flows, kinds, _ = _flows(bp)
+    (sender,) = [node for node, kind in kinds.items() if kind == "sendTask"]
+    assert PDF not in kinds
+    assert ("Activity_make_doc", sender) in flows
+
+
+@pytest.mark.parametrize(
+    ("targets", "stores"),
+    [
+        (("erp", "archive"), ("DataStore_erp", "DataStore_archive")),
+        (("erp-system", "erp_system"), ("DataStore_erp_system", "DataStore_erp_system_2")),
+    ],
+)
+def test_each_store_sits_under_its_own_sender(targets, stores):
+    bp = _blueprint(
+        [
+            UPLOAD,
+            EXTRACT,
+            _send("first_destination", ["extract"], target=targets[0]),
+            _send("second_destination", ["first_destination"], target=targets[1]),
+        ],
+        BASE_ARTS,
+        targets=targets,
+        outputs=("structured_json",),
+    )
+    _, kinds, writes = _flows(bp)
+    assert "sendTask" not in kinds.values()
+    first, second = stores
+    assert first in writes["Activity_first_destination"]
+    assert second in writes["Activity_second_destination"]
+    centers = {}
+    for shape in ET.fromstring(generate_bpmn(bp)).iter(
+        "{http://www.omg.org/spec/BPMN/20100524/DI}BPMNShape"
+    ):
+        bounds = shape[0]
+        centers[shape.get("bpmnElement")] = float(bounds.get("x")) + float(bounds.get("width")) / 2
+    assert centers[first] == centers["Activity_first_destination"]
+    assert centers[second] == centers["Activity_second_destination"]
+    assert centers[first] != centers[second]
+
+
+def test_done_mapping_distinguishes_work_before_and_after_the_anchor():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _report("make_doc", ["review"]),
+        _send("deliver", ["make_doc"]),
+        _step("announce", deps=["deliver"]),
+    ]
+    decision = _decision("finish", "deliver", ("announce", "announce"), ("done", "end"))
+    bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
+    generate_bpmn(bp)
+    mapping = bp.visualizations["bpmn_mapping"]
+    assert not any(entry["kind"] in ("pdf_generation", "send_task") for entry in mapping.values())
+    assert mapping["Activity_extract"]["done_report"] == "conditional"
+    assert mapping["Activity_extract"]["done_delivery"] == "conditional"
+    assert mapping["Activity_make_doc"]["done_report"] == "complete"
+    assert mapping["Activity_make_doc"]["done_delivery"] == "conditional"
+    assert mapping["Gateway_decision_finish"]["done_report"] == "complete"
+    assert mapping["Gateway_decision_finish"]["done_delivery"] == "complete"
+
+
 def test_a_sender_on_one_way_of_a_fork_keeps_the_submit_task():
     """A fork: one way reviews and sends, the other reaches a decision whose
     branch ends. The success end can be reached without the send step, so the

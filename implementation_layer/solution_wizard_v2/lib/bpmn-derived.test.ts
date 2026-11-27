@@ -79,6 +79,31 @@ describe("what a decision branch to the end leads to", () => {
     expect(endLeadsTo({ ...pdf, ...send })).toEqual({ report: true, delivery: true });
   });
 
+  it("explains explicit finishing work at the step or decision being edited", () => {
+    const mapping: BpmnMapping = {
+      Activity_review: {
+        kind: "human_review", blueprint_path: "workflow.steps[0]",
+        done_report: "conditional", done_delivery: "conditional",
+      },
+      Gateway_finish: {
+        kind: "decision_point", blueprint_path: "business_process.decision_points[0]",
+        decision: { id: "finish", after: "deliver", name: "Finish", branches: [] },
+        done_report: "complete", done_delivery: "complete",
+      },
+    };
+    const early = endLeadsTo(mapping, { after: "review" }, [{ id: "review" }]);
+    const late = endLeadsTo(mapping, { decision: { id: "finish" } });
+    expect(endChoiceNote(early, t)).toContain(
+      "If this branch skips the report step, a report can be added at the end.",
+    );
+    expect(endChoiceNote(early, t)).toContain(
+      "If this branch skips a delivery step, a delivery can be added at the end.",
+    );
+    expect(endChoiceNote(late, t)).toContain("The report is already complete at this point.");
+    expect(endChoiceNote(late, t)).toContain("The workflow’s own delivery steps have already run at this point.");
+    expect(endChoiceNote(late, fi)).toContain("Raportti on jo valmis tässä kohdassa.");
+  });
+
   it("names the end choice by what follows it", () => {
     expect(endChoiceLabel({ report: true, delivery: true }, fi)).toBe("Valmis: raportti ja vienti");
     expect(endChoiceLabel({ report: true, delivery: false }, fi)).toBe("Valmis: raportti");

@@ -1210,7 +1210,7 @@ export function BpmnDiagramPanel({
               : { name: decisionDialog.decision.name, branches: decisionDialog.decision.branches }
           }
           steps={steps.map((s) => ({ id: s.id, name: s.name }))}
-          endLeads={endLeadsTo(mapping?.mapping ?? {})}
+          endLeads={endLeadsTo(mapping?.mapping ?? {}, decisionDialog, steps)}
           busy={working}
           error={decisionError}
           onSave={saveDecision}

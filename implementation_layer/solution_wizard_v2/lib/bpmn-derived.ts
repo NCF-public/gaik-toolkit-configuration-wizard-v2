@@ -4,6 +4,7 @@ import {
   exceptionOf,
   stepIdOf,
   type BpmnMapping,
+  type DoneWork,
   type StepRef,
 } from "@/lib/bpmn-canvas-ops";
 import type { ChatReference } from "@/lib/chat-events";
@@ -43,16 +44,29 @@ export function isDerivedElement(elementId: string, mapping: BpmnMapping, steps:
 }
 
 /** What the diagram's successful end passes before it ends: the report, a delivery, both or neither. */
-export type EndLeadsTo = { report: boolean; delivery: boolean };
+export type EndLeadsTo = { report: boolean; delivery: boolean; ownReport?: DoneWork; ownDelivery?: DoneWork };
 
 /**
  * What a decision branch to the end leads to, read from the boxes the
  * generator draws (`pdf_generation`, `send_task`): every successful path passes
- * them on its way to the end, a branch to the end included.
+ * them on its way to the end, a branch to the end included. The mapping also
+ * describes any report or delivery covered by explicit steps at the anchor.
  */
-export function endLeadsTo(mapping: BpmnMapping): EndLeadsTo {
+export function endLeadsTo(
+  mapping: BpmnMapping,
+  anchor?: { after: string } | { decision: { id: string } },
+  steps: StepRef[] = [],
+): EndLeadsTo {
   const kinds = new Set(Object.values(mapping).map((entry) => entry?.kind));
-  return { report: kinds.has("pdf_generation"), delivery: kinds.has("send_task") };
+  const leads: EndLeadsTo = { report: kinds.has("pdf_generation"), delivery: kinds.has("send_task") };
+  if (!anchor) return leads;
+  const elementId = Object.keys(mapping).find((id) =>
+    "after" in anchor ? stepIdOf(id, mapping, steps) === anchor.after : mapping[id]?.decision?.id === anchor.decision.id,
+  );
+  const entry = elementId && mapping[elementId];
+  if (entry && entry.done_report) leads.ownReport = entry.done_report;
+  if (entry && entry.done_delivery) leads.ownDelivery = entry.done_delivery;
+  return leads;
 }
 
 export type EndChoiceTexts = Pick<
@@ -64,6 +78,11 @@ export type EndChoiceTexts = Pick<
   | "bpmnDecisionEndNoteReportDelivery"
   | "bpmnDecisionEndNoteReport"
   | "bpmnDecisionEndNoteDelivery"
+  | "bpmnDecisionEndNoteSuccess"
+  | "bpmnDecisionEndReportComplete"
+  | "bpmnDecisionEndReportConditional"
+  | "bpmnDecisionEndDeliveryComplete"
+  | "bpmnDecisionEndDeliveryConditional"
 >;
 
 /** The branch dialog's end choice: "done", with what follows it. */
@@ -74,12 +93,20 @@ export function endChoiceLabel(leads: EndLeadsTo, t: EndChoiceTexts): string {
   return t.bpmnDecisionEnd;
 }
 
-/** Under a branch to the end: it goes through the report and delivery, so an ending without a result is a rejection path. Null when nothing follows the end. */
+/** Explain the successful end and any finishing actions already covered by the workflow. */
 export function endChoiceNote(leads: EndLeadsTo, t: EndChoiceTexts): string | null {
-  if (leads.report && leads.delivery) return t.bpmnDecisionEndNoteReportDelivery;
-  if (leads.report) return t.bpmnDecisionEndNoteReport;
-  if (leads.delivery) return t.bpmnDecisionEndNoteDelivery;
-  return null;
+  const notes: string[] = [];
+  if (leads.report && leads.delivery) notes.push(t.bpmnDecisionEndNoteReportDelivery);
+  else if (leads.report) notes.push(t.bpmnDecisionEndNoteReport);
+  else if (leads.delivery) notes.push(t.bpmnDecisionEndNoteDelivery);
+  else if (leads.ownReport || leads.ownDelivery) notes.push(t.bpmnDecisionEndNoteSuccess);
+  if (leads.ownReport) {
+    notes.push(leads.ownReport === "complete" ? t.bpmnDecisionEndReportComplete : t.bpmnDecisionEndReportConditional);
+  }
+  if (leads.ownDelivery) {
+    notes.push(leads.ownDelivery === "complete" ? t.bpmnDecisionEndDeliveryComplete : t.bpmnDecisionEndDeliveryConditional);
+  }
+  return notes.length ? notes.join(" ") : null;
 }
 
 /** Why the box of mapping kind `kind` is drawn; the general text for any other kind. */
