@@ -1291,6 +1291,9 @@ class _BpmnBuilder:
             return
         fwd, order = self._forward_graph()
         anyway = self._runs_anyway(fwd, order)
+        # A decision with several branches to "end": the first gets the boxes,
+        # the others lead into them, so the case is not submitted twice.
+        first_box: Dict[str, str] = {}
         for dp_id, xg, flow in self._end_branches:
             if flow not in self.flows or flow.src != xg or flow.tgt != "EndEvent_success":
                 continue
@@ -1305,12 +1308,18 @@ class _BpmnBuilder:
 
             need_report = bool(reports) and not passed(reports)
             need_sends = [t for t, nodes in sends.items() if not passed(nodes)]
-            self._splice_branch_boxes(flow, dp_id, need_report, need_sends)
+            if xg in first_box:
+                flow.tgt = first_box[xg]
+                continue
+            start = self._splice_branch_boxes(flow, dp_id, need_report, need_sends)
+            if start is not None:
+                first_box[xg] = start
 
     def _splice_branch_boxes(
         self, flow: _Flow, dp_id: str, report: bool, targets: List[str]
-    ) -> None:
-        """The generated report and submission boxes on one decision branch."""
+    ) -> Optional[str]:
+        """The generated report and submission boxes on one decision branch;
+        returns the first box, or None when none is needed."""
         chain: List[str] = []
         if report:
             nid = f"Activity_generate_pdf_{_safe(dp_id)}"
@@ -1337,12 +1346,13 @@ class _BpmnBuilder:
             self._map(nid, "send_task", f"derived:submit:{t}:branch:{dp_id}")
             chain.append(nid)
         if not chain:
-            return
+            return None
         end = flow.tgt
         flow.tgt = chain[0]
         for a, b in zip(chain, chain[1:]):
             self._add_flow(a, b)
         self._add_flow(chain[-1], end)
+        return chain[0]
 
     def _new_decision_gateway(self, i: int, dp, beside: str) -> str:
         """The exclusive gateway a decision point is drawn as, in the lane of ``beside``."""

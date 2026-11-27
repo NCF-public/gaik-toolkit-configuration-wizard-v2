@@ -662,3 +662,25 @@ def test_the_shared_rules_read_final_output_as_the_blueprint_does():
     assert report_box_needed(draft) is False
     draft["artifacts"]["r"]["final_output"] = "false"
     assert report_box_needed(draft) is True
+
+
+def test_two_branches_to_end_share_one_set_of_generated_boxes():
+    """ "approved" and "no action" both go to "end": they lead into the same
+    generated report and submission, drawn once, and each run submits once."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _report("make_doc", ["review"]),
+        _send("deliver", ["make_doc"]),
+    ]
+    decision = _decision(
+        "d", "extract", ("approved", "end"), ("no action", "end"), ("check", "review")
+    )
+    bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
+    flows, kinds, _ = _flows(bp)
+
+    assert len(flows) == len(set(flows)) + flows.count(("Gateway_decision_d", PDF + "_d")) - 1
+    assert flows.count(("Gateway_decision_d", PDF + "_d")) == 2
+    assert sum(1 for k in kinds if k.startswith(PDF)) == 1
+    _assert_each_finished_run_passes_once(bp, {"Activity_make_doc"}, {"Activity_deliver"})
