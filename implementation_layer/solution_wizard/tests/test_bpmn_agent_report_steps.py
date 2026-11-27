@@ -98,33 +98,32 @@ EXTRACT = _step("extract", deps=["upload"], inputs=["invoice_pdf"], outputs=["re
 BASE_ARTS = {"invoice_pdf": _art("pdf", upload=True), "record": _art("structured_json", "extract")}
 
 
-def _invoice(*, report=True, submit=True, marker=ERP):
-    steps, arts = [UPLOAD, EXTRACT], dict(BASE_ARTS)
-    last = "extract"
-    if report:
-        steps.append(
-            _step("invoice_pdf_report_x", deps=[last], inputs=["record"], outputs=["report_pdf"])
-        )
-        arts["report_pdf"] = _art("pdf", "invoice_pdf_report_x", final=True)
-        last = "invoice_pdf_report_x"
-    if submit:
-        params = {"integration_target": marker} if marker else {}
-        steps.append(
-            _step(
-                "send_erp",
-                deps=[last],
-                inputs=["record"],
-                outputs=["erp_receipt"],
-                parameters=params,
-            )
-        )
-        arts["erp_receipt"] = _art("erp_submission", "send_erp", final=True)
-    return _blueprint(steps, arts)
+def _invoice(*, marker=ERP):
+    """Upload, extract and the agent's own send step, with no report step."""
+    params = {"integration_target": marker} if marker else {}
+    send = _step(
+        "send_erp", deps=["extract"], inputs=["record"], outputs=["erp_receipt"], parameters=params
+    )
+    arts = {**BASE_ARTS, "erp_receipt": _art("erp_submission", "send_erp", final=True)}
+    return _blueprint([UPLOAD, EXTRACT, send], arts)
 
 
-# The step ids above avoid "pdf" and "report_gen" on purpose where the old id rule
-# must not be what decides: invoice_pdf_report_x contains "pdf", so its own
-# test below uses a neutral id.
+def _paths(flows, start="StartEvent_1", end=END):
+    """Every path from the start to the success end, loops left out."""
+    out, nxt = [], {}
+    for a, b in flows:
+        nxt.setdefault(a, []).append(b)
+
+    def walk(node, seen):
+        if node == end:
+            out.append(seen)
+            return
+        for b in nxt.get(node, []):
+            if b not in seen:
+                walk(b, seen + [b])
+
+    walk(start, [start])
+    return out
 
 
 def test_the_agents_own_report_and_submission_are_drawn_once():
@@ -157,7 +156,7 @@ def test_the_agents_own_report_and_submission_are_drawn_once():
 
 
 def test_without_own_steps_both_boxes_are_generated_report_first():
-    flows, kinds, _ = _flows(_invoice(report=False, submit=False))
+    flows, kinds, _ = _flows(_blueprint([UPLOAD, EXTRACT], dict(BASE_ARTS)))
 
     assert ("Activity_extract", "Activity_generate_pdf") in flows
     send = next(k for k in kinds if k.startswith("Activity_submit_"))
@@ -180,7 +179,7 @@ def test_an_own_report_step_without_a_submission_gets_the_generated_send_after_i
 
 
 def test_an_own_submission_without_a_report_gets_the_generated_report_before_it():
-    flows, kinds, _ = _flows(_invoice(report=False))
+    flows, kinds, _ = _flows(_invoice())
 
     assert not any(k.startswith("Activity_submit_") for k in kinds)
     assert ("Activity_extract", "Activity_generate_pdf") in flows
@@ -210,7 +209,7 @@ def test_a_marker_for_one_of_two_targets_keeps_the_other_targets_box():
 
 
 def test_a_marker_naming_no_target_is_not_taken_for_the_submission():
-    flows, kinds, _ = _flows(_invoice(report=False, marker="erp"))
+    flows, kinds, _ = _flows(_invoice(marker="erp"))
 
     assert any(k.startswith("Activity_submit_") for k in kinds)
 
@@ -246,3 +245,111 @@ def test_an_own_report_on_one_branch_only_is_trusted_and_nothing_is_generated():
     flows, kinds, _ = _flows(_blueprint(steps, arts, targets=(), decisions=[decision]))
 
     assert "Activity_generate_pdf" not in kinds
+    paths = _paths(flows)
+    # Both branches still finish: one through the report, one past it.
+    assert any("Activity_make_document" in p for p in paths)
+    assert any("Activity_archive" in p and "Activity_make_document" not in p for p in paths)
+
+
+def _passes(path, node):
+    return path.count(node)
+
+
+def test_a_branch_to_end_goes_through_the_agents_own_report_and_submission():
+    """The auto-approval shape: a branch to "end" means done through the report and
+    the delivery, so with the agent's own steps it leads into them, not past them."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("review", "human_review", deps=["extract"], inputs=["record"]),
+        _step("make_doc", deps=["review"], inputs=["record"], outputs=["report_pdf"]),
+        _step(
+            "deliver",
+            deps=["make_doc"],
+            inputs=["record"],
+            outputs=["receipt"],
+            parameters={"integration_target": ERP},
+        ),
+    ]
+    arts = {
+        **BASE_ARTS,
+        "report_pdf": _art("pdf", "make_doc", final=True),
+        "receipt": _art("erp_submission", "deliver", final=True),
+    }
+    decision = {
+        "id": "auto",
+        "name": "Small invoice?",
+        "after": "extract",
+        "branches": [
+            {"condition": "small", "target": "end"},
+            {"condition": "big", "target": "review"},
+        ],
+    }
+    flows, kinds, _ = _flows(_blueprint(steps, arts, decisions=[decision]))
+
+    paths = _paths(flows)
+    assert len(paths) >= 2
+    for path in paths:
+        assert _passes(path, "Activity_make_doc") == 1, path
+        assert _passes(path, "Activity_deliver") == 1, path
+    assert any("Activity_review" not in p for p in paths)
+
+
+def test_a_branch_to_end_after_the_own_steps_still_ends():
+    """A decision after the agent's own send step: its branch to "end" ends, so no
+    loop back into the step is drawn."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step(
+            "deliver",
+            deps=["extract"],
+            inputs=["record"],
+            outputs=["receipt"],
+            parameters={"integration_target": ERP},
+        ),
+        _step("notify", deps=["deliver"]),
+    ]
+    arts = {**BASE_ARTS, "receipt": _art("erp_submission", "deliver", final=True)}
+    decision = {
+        "id": "tell",
+        "name": "Notify?",
+        "after": "deliver",
+        "branches": [
+            {"condition": "no", "target": "end"},
+            {"condition": "yes", "target": "notify"},
+        ],
+    }
+    flows, _, _ = _flows(
+        _blueprint(steps, arts, outputs=("structured_json",), decisions=[decision])
+    )
+
+    assert ("Gateway_decision_tell", END) in flows
+    assert ("Gateway_decision_tell", "Activity_deliver") not in flows
+
+
+def test_the_generated_report_goes_between_the_join_and_the_own_send_step():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("classify", deps=["upload"], inputs=["invoice_pdf"], outputs=["label"]),
+        _step(
+            "deliver",
+            deps=["extract", "classify"],
+            inputs=["record"],
+            outputs=["receipt"],
+            parameters={"integration_target": ERP},
+        ),
+    ]
+    arts = {
+        **BASE_ARTS,
+        "label": _art("structured_json", "classify"),
+        "receipt": _art("erp_submission", "deliver", final=True),
+    }
+    flows, kinds, _ = _flows(_blueprint(steps, arts))
+
+    join = "Gateway_join_deliver"
+    assert (join, "Activity_generate_pdf") in flows
+    assert ("Activity_generate_pdf", "Activity_deliver") in flows
+    assert ("Activity_extract", join) in flows
+    assert ("Activity_classify", join) in flows

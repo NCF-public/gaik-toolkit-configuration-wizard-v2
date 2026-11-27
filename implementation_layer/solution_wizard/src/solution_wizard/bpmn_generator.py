@@ -1031,14 +1031,14 @@ class _BpmnBuilder:
         # The agent's own submission step: the report is generated before it.
         senders = self._own_submission_steps()
         if senders:
+            # Into the step itself: behind a join before it, the join's one flow
+            # out is rerouted, so the join still waits for all its ways.
             node = self._lookup_node_for_step(senders[0])
-            join = f"Gateway_join_{_safe(senders[0])}"
-            entry = join if join in self.nodes else node
-            into = [f for f in self.flows if f.tgt == entry and not f.is_loop]
+            into = [f for f in self.flows if f.tgt == node and not f.is_loop]
             if into:
                 for f in into:
                     f.tgt = pdf_id
-                self._add_flow(pdf_id, entry)
+                self._add_flow(pdf_id, node)
                 return
 
         # The one way into the success end: the approved ("Yes") flow when a review
@@ -1079,13 +1079,17 @@ class _BpmnBuilder:
                 self._add_flow(after_node, xg)
             # Each branch's step, and the nodes a flow into it can lead to: the
             # step itself, or the join before it when it depends on several.
-            targets = [
-                "EndEvent_success"
-                if br.target in ("end", "")
-                else self._lookup_node_for_step(br.target)
-                for br in dp.branches
+            # A branch to "end" means done, through the report and the delivery:
+            # with the agent's own steps for them, it leads into the first of them.
+            finish = self._own_finish_step(dp.after)
+            ids = [
+                finish if br.target in ("end", "") and finish else br.target for br in dp.branches
             ]
-            entries = [self._entries_of(br.target, tgt) for br, tgt in zip(dp.branches, targets)]
+            targets = [
+                "EndEvent_success" if sid in ("end", "") else self._lookup_node_for_step(sid)
+                for sid in ids
+            ]
+            entries = [self._entries_of(sid, tgt) for sid, tgt in zip(ids, targets)]
             outgoing = self._dissolve_fork(after_node, xg, outgoing, set().union(*entries))
             for br, tgt, entry in zip(dp.branches, targets, entries):
                 if not tgt:
@@ -1103,6 +1107,28 @@ class _BpmnBuilder:
                     moved.name = br.condition or moved.name
                 else:
                     self._add_flow(xg, tgt, name=br.condition)
+
+    def _own_finish_step(self, after: str) -> Optional[str]:
+        """The first of the agent's own report and send steps that a decision
+        after ``after`` has not passed yet: where its branch to "end" leads, so
+        that the case is still reported and delivered. None when there is none,
+        or when all of them come before the decision (the branch then ends, and
+        no loop back is drawn)."""
+        own = set(self._own_report_steps()) | set(self._own_submission_steps())
+        if not own:
+            return None
+        deps = {s.id: list(s.depends_on or []) for s in self.bp.workflow.steps}
+        before, todo = set(), [after]
+        while todo:
+            sid = todo.pop()
+            if sid in before:
+                continue
+            before.add(sid)
+            todo.extend(deps.get(sid, []))
+        for s in self.bp.workflow.steps:
+            if s.id in own and s.id not in before:
+                return s.id
+        return None
 
     def _new_decision_gateway(self, i: int, dp, beside: str) -> str:
         """The exclusive gateway a decision point is drawn as, in the lane of ``beside``."""

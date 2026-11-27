@@ -204,15 +204,16 @@ ERP_TARGET = "ERP system (approved invoice data)"
 def _with_report_and_send(
     *, report_art=None, send_params=None, targets=(ERP_TARGET,), outputs=("pdf",)
 ):
-    """The live run's shape: invoice_pdf_report writes the report, erp_submission
-    sends to the ERP."""
+    """The live run's shape: a step writes the report, erp_submission sends to the
+    ERP. (The live run's report step was invoice_pdf_report; with "pdf" in its id
+    the diagram adds no report anyway, so no hint is given for it.)"""
     artifacts = {"invoice_pdf": {"type": "pdf", "source": "user_upload"}}
     if report_art is not None:
         artifacts["invoice_report"] = report_art
     steps = [
         {"id": "upload", "name": "Upload", "outputs": ["invoice_pdf"]},
         {
-            "id": "invoice_pdf_report",
+            "id": "invoice_report",
             "name": "Create the PDF report",
             "outputs": ["invoice_report"],
         },
@@ -226,7 +227,7 @@ def _with_report_and_send(
     }
 
 
-GENERATED_PDF = {"type": "pdf", "source": "generated", "produced_by": "invoice_pdf_report"}
+GENERATED_PDF = {"type": "pdf", "source": "generated", "produced_by": "invoice_report"}
 
 
 def test_steps_marked_as_the_report_and_the_submission_are_not_reported():
@@ -386,3 +387,69 @@ def test_the_problem_reaches_the_agent_until_the_draft_is_fixed(client, monkeypa
     _write(created["output_dir"], _draft([AUTO_APPROVAL]))
     client.post(f"/sessions/{sid}/chat", json={"message": "Entä nyt?"})
     assert "The diagram cannot draw" not in seen[-1]
+
+
+def _steps(draft):
+    return draft["workflow"]["steps"]
+
+
+def test_a_step_with_pdf_in_its_id_gets_no_report_hint():
+    """The diagram adds no report while a step's id has "pdf" in it, so there is
+    no second report to warn about."""
+    draft = _with_report_and_send(send_params={"integration_target": ERP_TARGET})
+    _steps(draft)[1]["id"] = "invoice_pdf_report"
+
+    assert session_service.process_reference_problems(draft) == []
+
+
+def test_steps_that_read_or_review_the_report_are_not_taken_for_its_writer():
+    draft = _with_report_and_send(send_params={"integration_target": ERP_TARGET})
+    _steps(draft)[1:2] = [
+        {"id": "parse", "name": "Parse the invoice PDF"},
+        {"id": "report_review", "name": "Manager reviews the report", "type": "human_review"},
+    ]
+
+    assert session_service.process_reference_problems(draft) == []
+
+
+def test_a_finnish_report_step_is_asked_for_its_pdf():
+    draft = _with_report_and_send(send_params={"integration_target": ERP_TARGET})
+    _steps(draft)[1]["name"] = "Laadi raportin yhteenveto"
+
+    problems = session_service.process_reference_problems(draft)
+
+    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[1]", "Laadi raportin yhteenveto")]
+
+
+def test_a_lookup_in_the_target_is_not_taken_for_the_submission():
+    draft = _with_report_and_send(report_art=GENERATED_PDF)
+    _steps(draft).insert(2, {"id": "check_erp_status", "name": "Match PO against ERP"})
+
+    problems = session_service.process_reference_problems(draft)
+
+    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[3]", "Submit to the ERP")]
+
+
+def test_a_marker_that_names_no_target_is_reported_with_the_exact_names():
+    draft = _with_report_and_send(
+        report_art=GENERATED_PDF, send_params={"integration_target": "erp_system"}
+    )
+
+    problems = session_service.process_reference_problems(draft)
+
+    assert problems[0] == (
+        "workflow.steps[2].parameters.integration_target",
+        "Submit to the ERP",
+        f'names no integration target: "erp_system"; use one of the exact names in '
+        f'technical_spec.integration_targets: "{ERP_TARGET}"',
+    )
+
+
+def test_parameters_that_are_not_an_object_do_not_drop_the_note():
+    draft = _with_report_and_send(report_art=GENERATED_PDF)
+    _steps(draft)[2]["parameters"] = ["x"]
+    _steps(draft)[0]["parameters"] = {"integration_target": {"not": "a name"}}
+
+    problems = session_service.process_reference_problems(draft)
+
+    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[2]", "Submit to the ERP")]

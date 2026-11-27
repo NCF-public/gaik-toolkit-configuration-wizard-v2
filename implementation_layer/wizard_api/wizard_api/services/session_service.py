@@ -375,33 +375,62 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
 #: Words of an integration target's name too common to tie a step to it.
 _TARGET_STOPWORDS = frozenset(
     "the and for with from into data system systems database repository store service api "
-    "approved record records invoice invoices".split()
+    "approved record records invoice invoices document documents management team".split()
 )
-_REPORT_WORDS = re.compile(r"report|raportti|pdf", re.IGNORECASE)
+_REPORT_WORDS = re.compile(r"report|raport|pdf", re.IGNORECASE)
+#: A step writes the report when its name says so, not when it reads or reviews one.
+_WRITE_WORDS = re.compile(
+    r"\b(generat|creat|writ|render|mak|compos|produc|build|laadi|laati|laadin|luo(da|daan)?\b"
+    r"|muodost|tuota|tuott|kirjoit)",
+    re.IGNORECASE,
+)
+#: A step sends to a target when its name says so, not when it looks something up there.
+_SEND_WORDS = re.compile(
+    r"\b(submi|send|export|deliver|transfer|forward|sync|vie(\b|d|n)|lähet|siirr|siirt|toimit)",
+    re.IGNORECASE,
+)
+#: Steps a person does: never the generated report or submission.
+_PERSON_STEPS = frozenset({"user_task", "human_review"})
 
 
 def _words(text: str) -> set[str]:
     return {w for w in re.split(r"[^0-9a-zäöå]+", text.lower()) if len(w) >= 3}
 
 
+def _step_text(step: dict) -> str:
+    return f"{_text(step.get('id'))} {_text(step.get('name'))}".replace("_", " ")
+
+
+def _marker(step: dict) -> str | None:
+    """The step's ``parameters.integration_target``, when it is a string."""
+    params = step.get("parameters")
+    marker = params.get("integration_target") if isinstance(params, dict) else None
+    return marker if isinstance(marker, str) and marker else None
+
+
 def _own_report_and_submission_hints(data: dict, steps: list[dict]) -> list[tuple[str, str, str]]:
-    """Steps that look like the report or a submission but are not marked as one.
+    """Steps that look like the report or a submission but are not marked as one,
+    and markers that name no integration target.
 
     The diagram adds a "Generate PDF report" task unless a step outputs a
-    generated pdf/report artifact it produces, and a "Submit to …" task per
-    integration target unless a step names it in
+    generated pdf/report artifact it produces (or, as before, a step's id or
+    component has "pdf" or "report_gen" in it), and a "Submit to …" task per
+    integration target unless a step names it exactly in
     ``parameters.integration_target`` (solution_wizard's bpmn_generator). A step
     the agent wrote for that work but did not mark is drawn beside a second,
-    generated one. These are hints, worded "if it does": a step is only taken
-    for the report or a submission by its id or name, which can be wrong.
+    generated one. These are hints, worded "if it does": a step is taken for the
+    report or a submission only by its id or name (an automated step that says it
+    writes a report, or sends to a word of the target), which can be wrong.
     """
     spec = data.get("technical_spec")
     spec = spec if isinstance(spec, dict) else {}
     outputs = spec.get("output_types") or []
     outputs = [outputs] if isinstance(outputs, str) else outputs
+    outputs = outputs if isinstance(outputs, list) else []
     targets = [t for t in spec.get("integration_targets") or [] if isinstance(t, str) and t]
     artifacts = data.get("artifacts")
     artifacts = artifacts if isinstance(artifacts, dict) else {}
+    automated = [(i, s) for i, s in enumerate(steps) if _text(s.get("type")) not in _PERSON_STEPS]
     hints: list[tuple[str, str, str]] = []
 
     def writes_report(step: dict) -> bool:
@@ -416,41 +445,75 @@ def _own_report_and_submission_hints(data: dict, steps: list[dict]) -> list[tupl
                 return True
         return False
 
-    if any(_text(o).lower() in ("pdf", "report") for o in outputs) and not any(
-        writes_report(s) for s in steps
-    ):
-        for i, step in enumerate(steps):
-            if _REPORT_WORDS.search(f"{_text(step.get('id'))} {_text(step.get('name'))}"):
-                hints.append(
-                    (
-                        f"workflow.steps[{i}]",
-                        _text(step.get("name")) or _text(step.get("id")),
-                        "looks like the step that writes the PDF report: if it is, give it an "
-                        'output artifact of type "pdf" with source "generated" and produced_by '
-                        "this step, so the diagram does not add a second report",
-                    )
-                )
-                break
+    def named_report_generator(step: dict) -> bool:
+        ident = f"{_text(step.get('id'))} {_text(step.get('component'))}".lower()
+        return "pdf" in ident or "report_gen" in ident
 
-    marked = {(s.get("parameters") or {}).get("integration_target") for s in steps}
+    def name(step: dict) -> str:
+        return _text(step.get("name")) or _text(step.get("id"))
+
+    adds_report = (
+        any(_text(o).lower() in ("pdf", "report") for o in outputs)
+        and not any(writes_report(s) for s in steps)
+        and not any(named_report_generator(s) for s in steps)
+    )
+    if adds_report:
+        found = [
+            (i, s)
+            for i, s in automated
+            if _REPORT_WORDS.search(_step_text(s)) and _WRITE_WORDS.search(_step_text(s))
+        ]
+        if found:
+            i, step = found[-1]
+            hints.append(
+                (
+                    f"workflow.steps[{i}]",
+                    name(step),
+                    "looks like the step that writes the PDF report: if it is, give it an "
+                    'output artifact of type "pdf" with source "generated" and produced_by '
+                    "this step, so the diagram does not add a second report",
+                )
+            )
+
+    exact = ", ".join(f'"{t}"' for t in targets)
+    for i, step in enumerate(steps):
+        marker = _marker(step)
+        if marker is not None and marker not in targets:
+            hints.append(
+                (
+                    f"workflow.steps[{i}].parameters.integration_target",
+                    name(step),
+                    f'names no integration target: "{marker}"; use one of the exact names '
+                    f"in technical_spec.integration_targets: {exact}"
+                    if targets
+                    else f'names no integration target: "{marker}"; '
+                    "technical_spec.integration_targets is empty",
+                )
+            )
+
+    marked = {_marker(s) for s in steps}
     for target in targets:
         if target in marked:
             continue
         words = _words(target) - _TARGET_STOPWORDS
-        for i, step in enumerate(steps):
-            if (step.get("parameters") or {}).get("integration_target"):
-                continue
-            if words & _words(f"{_text(step.get('id'))} {_text(step.get('name'))}"):
-                hints.append(
-                    (
-                        f"workflow.steps[{i}]",
-                        _text(step.get("name")) or _text(step.get("id")),
-                        f'looks like it sends to the integration target "{target}": if it does, '
-                        f'set parameters.integration_target to "{target}", so the diagram does '
-                        "not add a second submission",
-                    )
+        found = [
+            (i, s)
+            for i, s in automated
+            if _marker(s) is None
+            and words & _words(_step_text(s))
+            and _SEND_WORDS.search(_step_text(s))
+        ]
+        if found:
+            i, step = found[-1]
+            hints.append(
+                (
+                    f"workflow.steps[{i}]",
+                    name(step),
+                    f'looks like it sends to the integration target "{target}": if it does, '
+                    f'set parameters.integration_target to "{target}", so the diagram does '
+                    "not add a second submission",
                 )
-                break
+            )
     return hints
 
 
