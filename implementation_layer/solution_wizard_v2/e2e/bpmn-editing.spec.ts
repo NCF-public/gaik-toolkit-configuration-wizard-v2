@@ -1025,3 +1025,76 @@ test.describe("Workflow tab", () => {
     await expect(task).toBeInViewport();
   });
 });
+
+test.describe("Workflow tab: a step named like a generated task", () => {
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("a step named submit_to_erp is a step on the canvas: it is renamed and deleted with the step tools", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    // The agent names its own send step submit_to_erp: the diagram draws it as
+    // Activity_submit_to_erp, which starts like the generator's "Submit to …" task.
+    await openFlow(page);
+    await waitForDiagram(page, { edit: false });
+    await openBlueprintEditor(page);
+    await page.getByTestId("blueprint-json-toggle").click();
+    const current = JSON.parse(await page.getByTestId("blueprint-json-editor").inputValue()) as {
+      steps: { id: string }[];
+    };
+    await page.getByTestId("blueprint-done").click();
+    const content = {
+      ...current,
+      steps: current.steps.map((s) => (s.id === "export" ? { ...s, id: "submit_to_erp" } : s)),
+    };
+    const saved = await page.request.patch("/api/sessions/ses_laskut/blueprint", {
+      data: { content, note: "e2e: the send step named like a generated task" },
+    });
+    expect(saved.ok()).toBeTruthy();
+
+    const sent: { base_version: number; operations: unknown[] }[] = [];
+    await standInForWizardApi(
+      page,
+      async (route, body) => {
+        sent.push(body);
+        await route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: { error: "unsupported_edit", message: "x" } }),
+        });
+      },
+      { steps: () => ["ingest", "extract", "classify", "approve", "submit_to_erp"] },
+    );
+    // The stand-ins and the new version come before the canvas reads its mapping again.
+    await page.reload();
+    await setChatOpen(page, false);
+    await selectWorkspaceTab(page, "Työnkulku");
+    await openBpmnView(page);
+    await waitForDiagram(page);
+    const task = page.locator('.bpmn-editable [data-element-id="Activity_submit_to_erp"]');
+    await expect(task).toBeVisible();
+
+    // Picked from the list beside the diagram, it has the step's panel, not the
+    // note of a box the blueprint draws.
+    const row = page.getByTestId("flow-step-list").locator("li").nth(4);
+    await row.getByRole("button").first().click();
+    await expect(task).toHaveClass(/selected/);
+    await expect(page.getByTestId("bpmn-property-name")).toBeVisible();
+    await expect(page.getByTestId("bpmn-derived-note")).toHaveCount(0);
+
+    // Rename in place: rename_step on the step.
+    await page.locator('.djs-context-pad .entry[data-action="rename"]').click();
+    await page.locator(".bpmn-editable .djs-direct-editing-content").fill("Send to the ERP");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => sent.length).toBe(1);
+    expect(sent[0].operations).toEqual([{ op: "rename_step", step_id: "submit_to_erp", name: "Send to the ERP" }]);
+
+    // Delete: remove_step on the step.
+    await row.getByRole("button").first().click();
+    await page.locator('.djs-context-pad .entry[data-action="delete"]').click();
+    await expect.poll(() => sent.length).toBe(2);
+    expect(sent[1].operations).toEqual([{ op: "remove_step", step_id: "submit_to_erp" }]);
+  });
+});
