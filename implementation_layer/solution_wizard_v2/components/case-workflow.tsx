@@ -21,6 +21,7 @@ import {
   isDocument,
   isList,
   isStructured,
+  isQuestionInput,
   isTable,
   isTypedInput,
   parseInput,
@@ -34,6 +35,7 @@ import {
   toCsv,
   toMarkdown,
   typedInputFileName,
+  typedInputText,
   uncertainField,
 } from "@/lib/case-process";
 import { AI_FRONT_MATTER, AI_GENERATOR, AI_RECORD_MARK } from "@/lib/ai-marking";
@@ -1025,9 +1027,17 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
       // under "Ladataan…" until the page was reloaded.
       setUploadProblem(s.networkError);
     } finally {
+      // The first input's own path reads the new case itself.
+      if (p.onFirstInput) setUploading(false);
+    }
+    try {
+      // The buttons wait for the case to be read again: a text added again
+      // before that was named after a list without the first one, and the
+      // api refused the name it already held.
+      await p.reload();
+    } finally {
       setUploading(false);
     }
-    await p.reload();
     return taken;
   }
 
@@ -1039,15 +1049,19 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
     typedFor !== null && (p.accepted.length === 0 || p.accepted.some((a) => a.extensions.includes(".txt")));
   const [typedText, setTypedText] = useState("");
   const typedId = useId();
+  const pendingText = typed && typedText.trim().length > 0;
 
-  async function addTyped() {
-    const text = typedText.trim();
-    if (!text) return;
+  /** Adds the typed text to the case; true when it was taken, or there was none. */
+  async function addTyped(): Promise<boolean> {
+    const text = typedInputText(typedFor, typedText);
+    if (!text) return true;
     const name = typedInputFileName(
       typedFor,
       c.inputs.map((f) => f.name),
     );
-    if (await upload([new File([`${text}\n`], name, { type: "text/plain" })])) setTypedText("");
+    const taken = await upload([new File([`${text}\n`], name, { type: "text/plain" })]);
+    if (taken) setTypedText("");
+    return taken;
   }
 
   async function reusePocFile(filename: string) {
@@ -1196,6 +1210,7 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
             onChange={(e) => setTypedText(e.target.value)}
             placeholder={s.typedPlaceholder}
             disabled={blocked}
+            aria-describedby={`${typedId}-hint`}
             data-testid="case-typed-text"
           />
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -1209,7 +1224,9 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
               <Icon name={uploading ? "loaderCircle" : "plus"} size={16} className={uploading ? "animate-spin" : ""} />
               {s.typedAdd}
             </button>
-            <span className="text-xs text-text-muted">{s.typedHint}</span>
+            <span id={`${typedId}-hint`} className="text-xs text-text-muted">
+              {isQuestionInput(typedFor) ? s.typedQuestionHint : s.typedHint}
+            </span>
           </div>
         </div>
       )}
@@ -1389,9 +1406,14 @@ function InputView(p: ViewProps & { task: ProcessNode }) {
           type="button"
           className="btn-brand"
           data-testid="case-submit"
-          disabled={p.busy || blocked || mine.length === 0}
-          title={mine.length === 0 ? s.inputMissing : undefined}
+          // Text typed and not added yet counts as the step's input once the
+          // case exists; before that, adding it is what creates the case.
+          disabled={p.busy || blocked || (mine.length === 0 && (!pendingText || Boolean(p.onFirstInput)))}
+          title={mine.length === 0 && !pendingText ? s.inputMissing : undefined}
           onClick={async () => {
+            // It is what the person means to send: it was dropped when only
+            // "Add to the case" added it.
+            if (pendingText && !(await addTyped())) return;
             const body = JSON.stringify({ task: p.task.id, role: p.roleName(p.task.lane), note });
             const res = await p.act(() =>
               fetch(`${base}/${last ? "submit" : "step"}`, { method: "POST", headers: { "Content-Type": "application/json" }, body }),

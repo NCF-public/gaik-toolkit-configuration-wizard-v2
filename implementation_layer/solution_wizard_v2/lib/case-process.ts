@@ -369,12 +369,38 @@ export const isAudioInput = (name: string | null) => {
  * makes the user's question an upload, and the case page offered only a file
  * box for it: a tester wrote the question into a .txt to attach it. Told by its
  * name, as a recording is above; a voice message is a recording.
+ *
+ * The last word decides, as the head of the name: "Questionnaire PDF",
+ * "Kyselylomake" and "Kyselyn vastaukset" are documents, "Käyttäjäkysymys" and
+ * "Tekstiviesti" are typed.
  */
-export const isTypedInput = (name: string | null) => {
-  if (isAudioInput(name)) return false;
-  const words = (name ?? "").replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2");
-  return /(?<!\p{L})(?:question|quer(?:y|ies)|prompt|message|kysymy|kysely|viesti)/iu.test(words);
-};
+export const isTypedInput = (name: string | null) => !isAudioInput(name) && typedKind(name) !== null;
+
+/** A typed input that is a question: each one added is one question to the run. */
+export const isQuestionInput = (name: string | null) => typedKind(name) === "question";
+
+function typedKind(name: string | null): "question" | "text" | null {
+  const words = (name ?? "")
+    .replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2")
+    .split(/[^\p{L}]+/u)
+    .filter(Boolean);
+  const head = words.at(-1) ?? "";
+  if (/^(?:questions?|quer(?:y|ies))$/iu.test(head) || /(?:kysymy(?:s|ks\p{L}*)|kysely\p{L}{0,3})$/iu.test(head)) {
+    return "question";
+  }
+  if (/^(?:prompts?|messages?)$/iu.test(head) || /viesti\p{L}{0,3}$/iu.test(head)) return "text";
+  return null;
+}
+
+/**
+ * The text a typed input goes to the case with. A question is one line: the
+ * RAG template reads each line of a question file as a question of its own,
+ * so a question typed over two lines was answered as two, the second without
+ * its context. Other text keeps its lines.
+ */
+export function typedInputText(name: string | null, text: string): string {
+  return isQuestionInput(name) ? text.replace(/\s+/g, " ").trim() : text.trim();
+}
 
 /**
  * The file a typed input goes to the case as: the input's own name as a .txt

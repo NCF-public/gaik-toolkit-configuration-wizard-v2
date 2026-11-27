@@ -198,4 +198,49 @@ test.describe("PoC package status", () => {
     await expect(status).toHaveText("PoC-paketti ei ole valmis:");
     await expect(page.getByTestId("poc-problems").getByRole("listitem")).toHaveText(said);
   });
+
+  test("after a reply the package is judged by a read made after it, not by one from while it was written", async ({
+    page,
+  }) => {
+    const unfinished = {
+      generated: true,
+      ready: false,
+      problems: ["README.md is missing"],
+      files: ["run_poc.py", "requirements.txt"],
+      version: "v1",
+    };
+    let reads = 0;
+    let hold: Promise<void> | null = null;
+    await page.route(`**/api/sessions/${SESSION}/poc/files`, async (route) => {
+      reads += 1;
+      if (hold) await hold;
+      await route.fulfill({ json: unfinished });
+    });
+    await openPocTab(page);
+    const replying = (on: boolean) =>
+      page.evaluate((detail) => window.dispatchEvent(new CustomEvent("gaik-wizard:chat-replying", { detail })), on);
+    const status = page.getByTestId("poc-package-status");
+    await expect(status).toHaveAttribute("data-state", "incomplete");
+
+    await replying(true);
+    await expect(status).toHaveAttribute("data-state", "preparing");
+    // The tab reads the unfinished package again while the wizard writes.
+    const before = reads;
+    await expect.poll(() => reads, { timeout: 10_000 }).toBeGreaterThan(before);
+
+    // The reply ends and its read is on its way: the read from while the
+    // wizard wrote does not stand for the package in the meantime.
+    let release!: () => void;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const atEnd = reads;
+    await replying(false);
+    await expect.poll(() => reads).toBeGreaterThan(atEnd);
+    await expect(status).toHaveAttribute("data-state", "preparing");
+    await expect(page.getByTestId("poc-problems")).toHaveCount(0);
+
+    release();
+    await expect(status).toHaveAttribute("data-state", "incomplete");
+  });
 });

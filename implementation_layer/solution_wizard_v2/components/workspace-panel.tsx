@@ -1147,9 +1147,12 @@ export function WorkspacePanel({
       const replying = Boolean((e as CustomEvent<boolean>).detail);
       chatActivity.current = chatReplyingChanged(chatActivity.current, replying);
       setWizardReplying(replying);
-      if (replying) setPackageStale(true);
+      // Also when the reply ends: the tab reads the package while the wizard
+      // writes it, and a read from before the last write left the package
+      // "unfinished" in red and Gate 3 open until the next read came back.
+      setPackageStale(true);
       // The read this starts replaces any that was on its way.
-      else setPocRefresh((n) => n + 1);
+      if (!replying) setPocRefresh((n) => n + 1);
     };
     window.addEventListener(CHAT_REPLYING_EVENT, onReplying);
     return () => window.removeEventListener(CHAT_REPLYING_EVENT, onReplying);
@@ -2468,7 +2471,8 @@ export function WorkspacePanel({
         </div>
       )}
       {pocGenerated && keyFilesStrip}
-      {packageCollapsed ? (
+      {/* Nothing written yet: no package to tell details of. */}
+      {packageState === "preparing" && !pocGenerated ? null : packageCollapsed ? (
         <details
           className="group border-t border-border"
           data-testid="poc-package-details"
@@ -2491,7 +2495,8 @@ export function WorkspacePanel({
                   ref={regenReplaceRef}
                   type="button"
                   className="btn-secondary"
-                  disabled={generating || runActive}
+                  // Also when the confirm was opened before the wizard started writing.
+                  disabled={generating || runActive || packageState === "preparing"}
                   onClick={() => {
                     setRegenConfirm(false);
                     void runPoc();

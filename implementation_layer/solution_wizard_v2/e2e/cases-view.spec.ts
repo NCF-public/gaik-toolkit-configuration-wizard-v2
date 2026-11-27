@@ -755,6 +755,34 @@ const QA_MODEL = {
   package_problems: [],
 };
 
+/**
+ * Takes the typed files posted to case 1 as wizard_api would: by the name the
+ * form gives, refusing a name the case already holds. `refuse` answers the
+ * next post with a refusal instead.
+ */
+async function takeTypedFiles(page: Page, fake: Fake) {
+  const sent: { name: string; body: string }[] = [];
+  const state = { refuse: false, order: [] as string[] };
+  await page.route(`**${CASES}/${caseId(1)}/inputs`, async (route) => {
+    const body = route.request().postDataBuffer()?.toString("utf8") ?? "";
+    const name = /filename="([^"]+)"/.exec(body)?.[1] ?? "";
+    state.order.push("input");
+    if (state.refuse) {
+      state.refuse = false;
+      return route.fulfill({ status: 415, json: { detail: { error: "input_type_not_accepted", message: "unsupported file type" } } });
+    }
+    const found = fake.cases.find((c) => c.id === caseId(1));
+    const list = found?.inputs as { name: string; bytes: number; task?: string | null }[];
+    if (list.some((f) => f.name === name)) {
+      return route.fulfill({ status: 409, json: { detail: { error: "input_exists", message: `${name} is already in the case` } } });
+    }
+    sent.push({ name, body });
+    list.push({ name, bytes: 32, task: "T_ask" });
+    return route.fulfill({ status: 201, json: { name, bytes: 32, task: "T_ask" } });
+  });
+  return { sent, state };
+}
+
 test.describe("cases view: a question is typed, not uploaded (#121)", () => {
   test.beforeEach(async ({ request }) => {
     await resetMockSessions(request);
@@ -762,15 +790,7 @@ test.describe("cases view: a question is typed, not uploaded (#121)", () => {
 
   test("the typed question goes to the case as a text file of its own and the field empties", async ({ page }) => {
     const fake = await fakeCases(page, [], QA_MODEL);
-    const sent: { name: string; body: string }[] = [];
-    await page.route(`**${CASES}/${caseId(1)}/inputs`, async (route) => {
-      const body = route.request().postDataBuffer()?.toString("utf8") ?? "";
-      const name = /filename="([^"]+)"/.exec(body)?.[1] ?? "";
-      sent.push({ name, body });
-      const found = fake.cases.find((c) => c.id === caseId(1));
-      (found?.inputs as { name: string; bytes: number; task?: string | null }[]).push({ name, bytes: 32, task: "T_ask" });
-      return route.fulfill({ status: 201, json: { name, bytes: 32, task: "T_ask" } });
-    });
+    const { sent } = await takeTypedFiles(page, fake);
     await openCases(page);
 
     const add = page.getByTestId("case-typed-add");
@@ -788,8 +808,63 @@ test.describe("cases view: a question is typed, not uploaded (#121)", () => {
     expect(sent[0].body).toContain("Miten laite nollataan tehdasasetuksiin?");
   });
 
-  test("a step that takes a recording has no text field", async ({ page }) => {
-    await fakeCases(page, [], MODEL);
+  test("in a case, each added question is a file of its own on one line, and a refused one stays in the field", async ({ page }) => {
+    const fake = await fakeCases(page, [fakeCase(1, "draft")], QA_MODEL);
+    const { sent, state } = await takeTypedFiles(page, fake);
+    await openCases(page);
+    const field = page.getByLabel("User Question");
+    const add = page.getByTestId("case-typed-add");
+    await expect(field).toHaveAccessibleDescription(/Jokainen lisätty teksti on yksi kysymys/);
+
+    // Typed over two lines, it is still one question to the run.
+    await field.fill("Laitteessa näkyy virhekoodi E42.\nMiten korjaan sen?");
+    await add.click();
+    await expect(page.getByTestId("case-inputs")).toContainText("user_question.txt");
+    await expect(field).toHaveValue("");
+
+    state.refuse = true;
+    await field.fill("Mitä takuu kattaa?");
+    await add.click();
+    await expect(page.getByTestId("case-upload-problem")).toContainText("user_question_2.txt");
+    await expect(field).toHaveValue("Mitä takuu kattaa?");
+
+    // Added again, it is named after the case as read after the first one.
+    await add.click();
+    await expect(page.getByTestId("case-inputs")).toContainText("user_question_2.txt");
+    await expect(field).toHaveValue("");
+    expect(sent.map((s) => s.name)).toEqual(["user_question.txt", "user_question_2.txt"]);
+    expect(sent[0].body).toContain("Laitteessa näkyy virhekoodi E42. Miten korjaan sen?\n");
+  });
+
+  test("a question typed and not added is added when the case is sent", async ({ page }) => {
+    const fake = await fakeCases(page, [fakeCase(1, "draft")], QA_MODEL);
+    const { sent, state } = await takeTypedFiles(page, fake);
+    await page.route(`**${CASES}/${caseId(1)}/submit`, (route) => {
+      state.order.push("submit");
+      const found = fake.cases.find((c) => c.id === caseId(1));
+      if (found) found.status = "running";
+      return route.fulfill({ json: found });
+    });
+    await openCases(page);
+
+    const submit = page.getByTestId("case-submit");
+    await expect(submit).toBeDisabled();
+    await page.getByLabel("User Question").fill("Miten laite nollataan?");
+    await expect(submit).toBeEnabled();
+    await submit.click();
+
+    await expect.poll(() => state.order).toEqual(["input", "submit"]);
+    expect(sent.map((s) => s.name)).toEqual(["user_question.txt"]);
+  });
+
+  test("a step that takes a recording has no text field, also where a text file is taken", async ({ page }) => {
+    await fakeCases(page, [], {
+      ...MODEL,
+      accepted_inputs: [
+        { kind: "audio", label: "WAV", extensions: [".wav"] },
+        { kind: "txt", label: "TXT", extensions: [".txt"] },
+      ],
+    });
     await openCases(page);
 
     await expect(page.getByTestId("case-upload")).toBeVisible();
