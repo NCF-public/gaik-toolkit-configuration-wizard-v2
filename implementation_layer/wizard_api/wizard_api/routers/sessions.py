@@ -2321,7 +2321,10 @@ def _process_references_note(session) -> str | None:
     The diagram generator leaves out a decision with no step before it or fewer
     than two branches, a branch to no step, and a path on no step, without a
     word: in an invoice run the first diagram lacked the auto-approval and the
-    rejection path the agent meant to write, and the agent did not know. Told
+    rejection path the agent meant to write, and the agent did not know. A
+    choice written twice (a decision point beside a step of type "decision"
+    that makes the same choice, or two points after one step) is drawn twice
+    and is named here too. Told
     with every message while the draft has such a problem, like Gate 1's line.
     The names and ids are the agent's own, possibly taken from a document, so
     they are quoted as data.

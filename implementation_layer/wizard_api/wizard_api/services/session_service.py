@@ -303,20 +303,34 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
         name = _text(decision.get("name")) or _text(decision.get("id"))
         after = _ref(decision.get("after"))
         branches = _dicts(decision.get("branches"))
-        targets = {_ref(b.get("target")) for b in branches} - {"end", ""}
+        # "end" is kept: a point that lets some cases end is not a decision step's choice.
+        targets = {_ref(b.get("target")) for b in branches} - {""}
         if not after.strip():
             problems.append((path, name, "after is empty"))
         elif after not in step_ids:
             problems.append((path, name, f'after names no step: "{after}"'))
+        elif after in decision_steps:
+            # Right after a decision step: the step's own gateway is left with one
+            # way out, into this point's. One of them is enough.
+            problems.append(
+                (
+                    path,
+                    name,
+                    f'comes right after the step of type "decision" "{after}", which already '
+                    "decides there: write the choice once, as that step or as this decision point",
+                )
+            )
         else:
             # The same choice written twice is drawn twice (the point is its own
-            # gateway): keep it in one place.
+            # gateway): the point leads to two or more of the very steps a
+            # decision step right after it chooses between, and nowhere else.
             repeated = next(
                 (
                     d
-                    for d in sorted({after} | dependents.get(after, set()))
+                    for d in sorted(dependents.get(after, set()))
                     if d in decision_steps
-                    and (d == after or (targets and targets <= dependents.get(d, set())))
+                    and len(targets) >= 2
+                    and targets <= dependents.get(d, set())
                 ),
                 None,
             )
@@ -329,6 +343,7 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
                         "write the choice once, as that step or as this decision point",
                     )
                 )
+        if after.strip() and after in step_ids:
             if after in seen_after:
                 problems.append((path, name, f'another decision point is already after "{after}"'))
             seen_after.add(after)

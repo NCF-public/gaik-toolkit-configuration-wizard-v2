@@ -142,8 +142,8 @@ def test_a_decision_point_after_a_decision_step_repeats_its_choice():
         (
             "business_process.decision_points[0]",
             "p",
-            'repeats the choice of the step of type "decision" "check": '
-            "write the choice once, as that step or as this decision point",
+            'comes right after the step of type "decision" "check", which already decides '
+            "there: write the choice once, as that step or as this decision point",
         )
     ]
 
@@ -164,6 +164,16 @@ def test_a_decision_point_before_a_decision_step_that_skips_it_is_its_own_choice
     """A point after pre leading to route itself or past it is a choice of its own."""
     problems = session_service.process_reference_problems(
         _with_decision_steps(_point("p", "pre", "route", "report"))
+    )
+
+    assert problems == []
+
+
+def test_a_decision_point_whose_ending_differs_from_a_decision_steps_ways_is_its_own_choice():
+    """The second review's case: after pre, some cases go to manager and the
+    rest end; route chooses between manager and report. Not the same choice."""
+    problems = session_service.process_reference_problems(
+        _with_decision_steps(_point("p", "pre", "manager", "end"))
     )
 
     assert problems == []
