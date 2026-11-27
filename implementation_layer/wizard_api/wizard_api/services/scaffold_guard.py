@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import copy
 import keyword
+import os
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -145,6 +146,28 @@ def endpoint_ok(value: str) -> bool:
             for h in _PROVIDER_HOSTS
         )
     )
+
+
+def configured_endpoint(value: str) -> bool:
+    """A provider endpoint whose host is one this deployment configures itself.
+
+    The hosts are those of the ``...ENDPOINT``, ``...BASE_URL`` and ``...API_BASE``
+    variables in the API's environment. An endpoint the agent was given, even on
+    a provider's domain, may be a resource someone else runs, and the call there
+    would carry the deployment's key and the user's text.
+    """
+    if not endpoint_ok(value) or _env_name(value) is not None:
+        return False
+    host = (urlsplit(value.strip()).hostname or "").lower()
+    for name, configured in os.environ.items():
+        if not _ENDPOINT_ENV.match(name) or not configured.strip():
+            continue
+        try:
+            if (urlsplit(configured.strip()).hostname or "").lower() == host:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _model_problems(models: Any) -> list[str]:

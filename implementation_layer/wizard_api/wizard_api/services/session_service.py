@@ -50,6 +50,7 @@ SERVER_OWNED_METADATA_KEYS = frozenset(
         "last_successful_run_package",
         "agent_seen_run",
         "agent_sdk_session_id",
+        "agent_sdk_session_ids",
         "protected",
         artifact_sync.ADOPTED_DRAFT_KEY,
         artifact_sync.AI_STEPS_KEY,
@@ -248,6 +249,76 @@ def gate1_missing(ctx: BusinessContext | None) -> list[str]:
 
 def gate1_missing_from_draft(data: dict | None) -> list[str]:
     return gate1_missing(_business_context_from_draft(data))
+
+
+def _dicts(value: object) -> list[dict]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _ref(value: object) -> str:
+    """An id as the diagram generator compares it: exactly, spaces and all."""
+    return value if isinstance(value, str) else ""
+
+
+def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
+    """What in the draft's decisions and paths the diagram cannot draw.
+
+    The diagram generator (solution_wizard's bpmn_generator) draws a decision
+    point only after a step it finds, a branch only to a step or "end", and an
+    exception path only on a step; anything else it leaves out without a word.
+    In an invoice run the agent wrote a decision with an empty ``after`` and no
+    branches and a rejection path with an empty ``attached_to``, and the first
+    diagram lacked both. Each problem is ``(field path, the agent's name for it,
+    what is wrong)``; the name is the agent's text, to be quoted as data.
+
+    Nothing is reported before the workflow has steps: the skill collects the
+    decisions (Phase 3.5) before it builds ``workflow.steps`` (Phase 6). Ids are
+    compared exactly, as the generator does.
+    """
+    if not isinstance(data, dict):
+        return []
+    process = data.get("business_process")
+    workflow = data.get("workflow")
+    steps = _dicts(workflow.get("steps")) if isinstance(workflow, dict) else []
+    if not isinstance(process, dict) or not steps:
+        return []
+    step_ids = {_ref(s.get("id")) for s in steps + _dicts(process.get("manual_steps"))}
+    step_ids.discard("")
+
+    problems: list[tuple[str, str, str]] = []
+    for i, decision in enumerate(_dicts(process.get("decision_points"))):
+        path = f"business_process.decision_points[{i}]"
+        name = _text(decision.get("name")) or _text(decision.get("id"))
+        after = _ref(decision.get("after"))
+        if not after.strip():
+            problems.append((path, name, "after is empty"))
+        elif after not in step_ids:
+            problems.append((path, name, f'after names no step: "{after}"'))
+        branches = _dicts(decision.get("branches"))
+        if len(branches) < 2:
+            problems.append((path, name, f"has {len(branches)} branches, needs at least two"))
+        for n, branch in enumerate(branches, start=1):
+            target = _ref(branch.get("target"))
+            if not target.strip():
+                problems.append((path, name, f"branch {n} has no target"))
+            elif target != "end" and target not in step_ids:
+                problems.append((path, name, f'branch {n} target names no step: "{target}"'))
+    for i, path_item in enumerate(_dicts(process.get("exceptions"))):
+        path = f"business_process.exceptions[{i}]"
+        name = _text(path_item.get("name")) or _text(path_item.get("id"))
+        attached = _ref(path_item.get("attached_to"))
+        if not attached.strip():
+            problems.append((path, name, "attached_to is empty"))
+        elif attached not in step_ids:
+            problems.append((path, name, f'attached_to names no step: "{attached}"'))
+        outcome = _ref(path_item.get("outcome"))
+        if outcome.startswith("loop_to:") and outcome.split(":", 1)[1].strip() not in step_ids:
+            problems.append((path, name, f'outcome names no step: "{outcome}"'))
+    return problems
 
 
 def _assumptions_from_draft(data: dict | None) -> list[AssumptionItem]:

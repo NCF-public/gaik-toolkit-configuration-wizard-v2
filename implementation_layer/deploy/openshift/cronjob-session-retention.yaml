@@ -1,0 +1,68 @@
+# Removes the sessions nobody has changed for the retention period, every night.
+#
+# The privacy notice says a session and its files are removed when nobody has
+# changed it for 90 days; this Job is what removes them. It runs
+# `python -m wizard_api.session_admin purge --apply` in the api image: the purge
+# reads the due sessions from the database and deletes each through the running
+# api (the same delete as the session list's), so it needs no sessions volume.
+# Protected sessions are left out. WIZARD_SESSION_RETENTION_DAYS sets the period
+# (90 unless set). Installed with `./deploy.sh retention`.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: NAME_PLACEHOLDER-session-retention
+  labels:
+    app: NAME_PLACEHOLDER-session-retention
+    app.kubernetes.io/part-of: gaik-wizard-v2
+spec:
+  schedule: "40 2 * * *"
+  timeZone: Europe/Helsinki
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app: NAME_PLACEHOLDER-session-retention
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: purge
+              image: image-registry.apps.2.rahti.csc.fi/PROJECT_PLACEHOLDER/NAME_PLACEHOLDER-api:latest
+              command: ["python", "-m", "wizard_api.session_admin", "purge", "--apply"]
+              env:
+                - name: WIZARD_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: NAME_PLACEHOLDER-db
+                      key: database-url
+                - name: WIZARD_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: NAME_PLACEHOLDER-token
+                      key: WIZARD_API_TOKEN
+                - name: WIZARD_API_LOCAL_URL
+                  value: http://NAME_PLACEHOLDER-api:8100
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

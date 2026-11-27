@@ -6,6 +6,7 @@ _SOLUTION_WIZARD_SRC = Path(__file__).resolve().parents[2] / "solution_wizard" /
 if _SOLUTION_WIZARD_SRC.is_dir():
     sys.path.insert(0, str(_SOLUTION_WIZARD_SRC))
 
+import database_guard
 import pytest
 from fastapi.testclient import TestClient
 from helpers import postgres_available
@@ -18,6 +19,20 @@ from wizard_api.main import app
 from wizard_api.models import Base, BlueprintVersion, UsageTotal, WizardSession
 
 requires_postgres = pytest.mark.skipif(not postgres_available(), reason="Postgres not available")
+
+
+def pytest_configure(config):
+    """Stop before the first test unless the database is a test database (#278).
+
+    ``db_session`` below deletes every session, version and usage row after each test,
+    and ``WIZARD_DATABASE_URL`` unset means the API's default, the local stack's
+    database. ``database_guard`` says what the run needs instead.
+    """
+    if config.option.help:
+        return
+    problem = database_guard.check(get_database_url(), Base.metadata)
+    if problem:
+        raise pytest.UsageError(problem)
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +64,14 @@ def _usage_caps_off_unless_a_test_sets_them(monkeypatch):
 
 @pytest.fixture
 def db_engine():
-    engine = create_engine(get_database_url(), pool_pre_ping=True)
+    url = get_database_url()
+    engine = create_engine(url, pool_pre_ping=True)
+    # pytest_configure lets the run go on when nothing answered then; a database that
+    # answers now must still be a test database before tables are made or emptied.
+    problem = database_guard.reached_problem(engine, url)
+    if problem:
+        engine.dispose()
+        pytest.exit(problem, returncode=pytest.ExitCode.USAGE_ERROR)
     Base.metadata.create_all(engine)
     yield engine
     engine.dispose()

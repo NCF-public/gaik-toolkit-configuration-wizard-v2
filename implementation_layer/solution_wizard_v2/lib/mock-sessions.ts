@@ -1067,8 +1067,9 @@ export function setSessionStep(
   step: number,
   /** Also record (a run id) or clear (null) the successful test run: the mock has no sandbox to make one. */
   successfulRun?: string | null,
-  /** The digests wizard_api keeps of the package: the one the successful run tested, and the one there now. */
-  digests: { testedPackage?: string | null; packageDigest?: string | null } = {},
+  /** The digests wizard_api keeps of the package: the one the successful run tested, and the one there now.
+   *  `latestRun` is the session's latest run, whatever its outcome, which a reloaded PoC tab asks about. */
+  digests: { testedPackage?: string | null; packageDigest?: string | null; latestRun?: string | null } = {},
 ): WizardSession | undefined {
   const s = getSession(id);
   if (!s) return undefined;
@@ -1076,6 +1077,7 @@ export function setSessionStep(
   if (successfulRun !== undefined) s.lastSuccessfulRun = successfulRun;
   if (digests.testedPackage !== undefined) s.lastSuccessfulRunPackage = digests.testedPackage;
   if (digests.packageDigest !== undefined) s.packageDigest = digests.packageDigest;
+  if (digests.latestRun !== undefined) s.latestRun = digests.latestRun;
   s.updatedAt = new Date().toISOString();
   return s;
 }

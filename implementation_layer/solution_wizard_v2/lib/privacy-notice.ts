@@ -62,7 +62,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
         },
         {
           heading: "How long data is kept",
-          text: "A session and its files are removed when nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service. Usage data stored for monitoring is kept in the monitoring system, apart from the session: removing the session does not remove it, but its session id is pseudonymised and leads to no session once that is removed. Its retention period is confirmed by the organisation running this service.",
+          text: "A session and its files are removed in the nightly clean-up once nobody has changed the session for 90 days; a chat message, a gate decision or an edit counts as a change, opening the session does not. Before that you can download the session's data from the session list. Finished sandbox runs and their logs are removed from the cluster after one hour. Retention periods for logs are confirmed by the organisation running this service. Usage data stored for monitoring is kept in the monitoring system, apart from the session: removing the session does not remove it, but its session id is pseudonymised and leads to no session once that is removed. Its retention period is confirmed by the organisation running this service.",
         },
         {
           heading: "Your rights",
@@ -117,7 +117,7 @@ export function privacyNotice(locale: Locale, env: Env = process.env): PrivacyNo
       },
       {
         heading: "Kuinka kauan tietoja säilytetään",
-        text: "Sessio ja sen tiedostot poistetaan, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat. Seurantaa varten tallennetut käyttötiedot säilytetään seurantajärjestelmässä erillään sessiosta: session poistaminen ei poista niitä, mutta niiden sessiotunnus on pseudonymisoitu eikä johda mihinkään sessioon, kun sessio on poistettu. Palvelua ylläpitävä organisaatio vahvistaa niiden säilytysajan.",
+        text: "Sessio ja sen tiedostot poistetaan yöllisessä siivouksessa, kun sessiota ei ole muutettu 90 päivään; muutokseksi lasketaan chat-viesti, gate-päätös tai muokkaus, pelkkä avaaminen ei. Sitä ennen voit ladata session tiedot session listalta. Valmiit sandbox-ajot ja niiden lokit poistuvat klusterista tunnin kuluttua. Palvelua ylläpitävä organisaatio vahvistaa lokien säilytysajat. Seurantaa varten tallennetut käyttötiedot säilytetään seurantajärjestelmässä erillään sessiosta: session poistaminen ei poista niitä, mutta niiden sessiotunnus on pseudonymisoitu eikä johda mihinkään sessioon, kun sessio on poistettu. Palvelua ylläpitävä organisaatio vahvistaa niiden säilytysajan.",
       },
       {
         heading: "Oikeutesi",

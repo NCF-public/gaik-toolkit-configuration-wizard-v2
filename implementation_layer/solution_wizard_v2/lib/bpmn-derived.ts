@@ -42,6 +42,46 @@ export function isDerivedElement(elementId: string, mapping: BpmnMapping, steps:
   );
 }
 
+/** What the diagram's successful end passes before it ends: the report, a delivery, both or neither. */
+export type EndLeadsTo = { report: boolean; delivery: boolean };
+
+/**
+ * What a decision branch to the end leads to, read from the boxes the
+ * generator draws (`pdf_generation`, `send_task`): every successful path passes
+ * them on its way to the end, a branch to the end included.
+ */
+export function endLeadsTo(mapping: BpmnMapping): EndLeadsTo {
+  const kinds = new Set(Object.values(mapping).map((entry) => entry?.kind));
+  return { report: kinds.has("pdf_generation"), delivery: kinds.has("send_task") };
+}
+
+export type EndChoiceTexts = Pick<
+  Dict,
+  | "bpmnDecisionEnd"
+  | "bpmnDecisionEndReportDelivery"
+  | "bpmnDecisionEndReport"
+  | "bpmnDecisionEndDelivery"
+  | "bpmnDecisionEndNoteReportDelivery"
+  | "bpmnDecisionEndNoteReport"
+  | "bpmnDecisionEndNoteDelivery"
+>;
+
+/** The branch dialog's end choice: "done", with what follows it. */
+export function endChoiceLabel(leads: EndLeadsTo, t: EndChoiceTexts): string {
+  if (leads.report && leads.delivery) return t.bpmnDecisionEndReportDelivery;
+  if (leads.report) return t.bpmnDecisionEndReport;
+  if (leads.delivery) return t.bpmnDecisionEndDelivery;
+  return t.bpmnDecisionEnd;
+}
+
+/** Under a branch to the end: it goes through the report and delivery, so an ending without a result is a rejection path. Null when nothing follows the end. */
+export function endChoiceNote(leads: EndLeadsTo, t: EndChoiceTexts): string | null {
+  if (leads.report && leads.delivery) return t.bpmnDecisionEndNoteReportDelivery;
+  if (leads.report) return t.bpmnDecisionEndNoteReport;
+  if (leads.delivery) return t.bpmnDecisionEndNoteDelivery;
+  return null;
+}
+
 /** Why the box of mapping kind `kind` is drawn; the general text for any other kind. */
 export function derivedNote(kind: string | undefined, t: DerivedTexts): string {
   const key = kind && Object.prototype.hasOwnProperty.call(NOTES, kind) ? NOTES[kind] : "bpmnDerivedElement";

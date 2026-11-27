@@ -18,9 +18,11 @@ Nothing here writes to disk: a refused file never reaches the input directory.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -129,6 +131,8 @@ class UnsupportedInputError(poc_service.InputRejectedError):
 
 class InvalidInputError(poc_service.InputRejectedError):
     """The content is an accepted type but not a usable file of it (422)."""
+
+    reason = "unreadable"
 
 
 class UnsafeContentError(InvalidInputError):
@@ -361,6 +365,19 @@ def _check_text(data: bytes, kind: str) -> None:
             raise InvalidInputError("the JSON file is not valid JSON") from exc
 
 
+#: Input checks at a time; more wait for a free thread, so slow checks never
+#: hold the threads other routes use. The PDF check also stops at its own
+#: deadline (``pdf_content.CHECK_SECONDS``).
+CHECK_THREADS = 2
+_checks = ThreadPoolExecutor(max_workers=CHECK_THREADS, thread_name_prefix="input-check")
+
+
+async def check_in_pool(filename: str, data: bytes, allowed: frozenset[str] = ALL_KINDS) -> str:
+    """``check`` in the input checks' own threads."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_checks, check, filename, data, allowed)
+
+
 def without_image_metadata(kind: str, data: bytes) -> tuple[bytes, tuple[str, ...]]:
     """An image of ``kind`` without the text its file carries besides the pixels
     (EXIF with the GPS position, XMP, IPTC, PNG text, comments), and what was
@@ -393,7 +410,7 @@ def check(filename: str, data: bytes, allowed: frozenset[str] = ALL_KINDS) -> st
     if kind is None or kind not in allowed:
         raise UnsupportedInputError(f"this file type is not accepted here; {accepted}")
     if not data:
-        raise poc_service.InputRejectedError("the file is empty")
+        raise poc_service.InputRejectedError("the file is empty", reason="empty")
 
     sniffed = _sniff_binary(data)
     # An archive is opened only where an office format is declared; any other

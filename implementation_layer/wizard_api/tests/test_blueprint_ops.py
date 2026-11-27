@@ -510,6 +510,36 @@ def test_set_step_type_to_automated_without_a_component_needs_attention():
     assert "review: needs a component" in result.needs_attention
 
 
+# ---------------------------------------------------------------- replace_draft (the JSON view)
+
+
+def test_a_json_save_that_makes_a_step_automated_needs_a_component_for_it_only():
+    """As set_step_type: the step the save makes an automated task needs a
+    component; one that already was one, or that keeps its component, does not."""
+    old = _draft()
+    del _steps(old)["deliver"]["component"]  # an automated task left without one
+    new = copy.deepcopy(old)
+    _steps(new)["review"]["type"] = "automated_task"
+    _steps(new)["extract"]["name"] = "Read the invoice"  # changed, with its component
+
+    result = apply_operations(old, [blueprint_ops.ReplaceDraft(new)])
+
+    assert result.blueprint == new
+    needs = [n for n in result.needs_attention if n.endswith(": needs a component")]
+    assert needs == ["review: needs a component"]
+    assert blueprint_ops.steps_made_automated(old, new) == ["review"]
+
+
+def test_a_new_automated_step_and_a_removed_component_are_made_automated():
+    old = _draft()
+    new = copy.deepcopy(old)
+    del _steps(new)["extract"]["component"]
+    new["workflow"]["steps"].append(_step("classify", "automated_task", depends_on=["deliver"]))
+
+    assert blueprint_ops.steps_made_automated(old, new) == ["extract", "classify"]
+    assert blueprint_ops.steps_made_automated(new, new) == []
+
+
 # ---------------------------------------------------------------- validation policy
 
 
