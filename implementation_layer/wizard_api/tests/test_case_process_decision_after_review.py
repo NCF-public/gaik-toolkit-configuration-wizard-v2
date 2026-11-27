@@ -72,13 +72,29 @@ def _blueprint() -> "Blueprint":
     )
 
 
-def test_the_case_walk_passes_the_approval_and_the_decision_after_the_review():
+def _nodes_walked(process: dict) -> list[str]:
+    """Every node the case walk passes, gateways too, by its own rule: from the
+    start event, the flow named like "Yes" at a fork, else the first one."""
+    flows = process["flows"]
+    start = next(n["id"] for n in process["nodes"] if n["kind"] == "startEvent")
+    walked, node = [], start
+    while node and node not in walked:
+        walked.append(node)
+        out = [f for f in flows if f["from"] == node]
+        chosen = next(
+            (f for f in out if case_service._YES.match(f["name"])), out[0] if out else None
+        )
+        node = chosen["to"] if chosen else None
+    return walked
+
+
+def test_the_case_walk_passes_the_approval_and_then_the_decision_after_the_review():
     process = case_service.process_from_bpmn(generate_bpmn(_blueprint()))
 
     assert case_service.process_problem(process) is None
     assert case_service.reviewer_task(process) == "Activity_review"
-    walked = [n["id"] for n in case_service._walk(process)]
-    assert walked[:3] == ["Activity_upload", "Activity_extract", "Activity_review"]
-    # After the review: the approval's "Yes" leads to the decision, then one way on.
-    assert walked[3] in ("Activity_fast", "Activity_slow")
-    assert len(walked) == 4
+    walked = _nodes_walked(process)
+    review = walked.index("Activity_review")
+    # Review, its approval, then the decision on the approval's "Yes", then one way on.
+    assert walked[review + 1 : review + 3] == ["Gateway_approve_review", "Gateway_decision_speed"]
+    assert walked[review + 3] in ("Activity_fast", "Activity_slow")

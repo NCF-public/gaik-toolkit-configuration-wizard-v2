@@ -140,7 +140,10 @@ def test_a_step_after_both_ways_of_a_decision_step_is_reached_through_an_exclusi
     assert _into(flows, "Activity_done") == [("Gateway_join_done", "")]
 
 
-def test_a_decision_steps_ways_take_the_conditions_of_a_decision_point_after_it():
+def test_a_decision_point_after_a_decision_step_stays_its_own_gateway():
+    """The point keeps its own gateway (and its mapping, so the canvas can edit
+    and remove it); the step's dependents are its branches, with no fork. The
+    agent hears that the choice is written twice (the draft note)."""
     steps = [
         dict(_step("extract", inputs=["src"]), outputs=["out"]),
         _decision_step("check", ["extract"]),
@@ -156,14 +159,47 @@ def test_a_decision_steps_ways_take_the_conditions_of_a_decision_point_after_it(
             {"condition": "missing", "target": "ask_more"},
         ],
     }
-    flows, kinds = _flows(_blueprint(steps, decisions=[labelled]))
+    bp = _blueprint(steps, decisions=[labelled])
+    flows, kinds = _flows(bp)
 
-    # One gateway decides: the step's own, with the point's conditions on its ways.
-    assert "Gateway_decision_complete" not in kinds
-    assert _out_of(flows, "Gateway_check") == [
+    assert kinds["Gateway_decision_complete"] == "exclusiveGateway"
+    assert "Gateway_fork_check" not in kinds
+    assert _out_of(flows, "Gateway_check") == [("Gateway_decision_complete", "")]
+    assert _out_of(flows, "Gateway_decision_complete") == [
         ("Activity_accept", "complete"),
         ("Activity_ask_more", "missing"),
     ]
+    assert not [f for f in flows if f[0] == f[1]]
+    # _flows drew it: the canvas finds the point by this mapping entry.
+    mapping = bp.visualizations["bpmn_mapping"]
+    assert mapping["Gateway_decision_complete"]["kind"] == "decision_point"
+
+
+def test_a_decision_point_that_branches_to_a_decision_step_after_its_step_draws_no_self_loop():
+    """The second review's case: pre -> route (a decision step), and a point
+    after pre leads to route or straight to the report."""
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _step("pre", deps=["extract"]),
+        _decision_step("route", ["pre"]),
+        _step("manager", "user_task", deps=["route"]),
+        _step("report", deps=["route", "manager"]),
+    ]
+    point = {
+        "id": "p1",
+        "name": "Check?",
+        "after": "pre",
+        "branches": [
+            {"condition": "needs check", "target": "route"},
+            {"condition": "skip", "target": "report"},
+        ],
+    }
+    bp = _blueprint(steps, decisions=[point])
+    flows, _ = _flows(bp)
+
+    assert not [f for f in flows if f[0] == f[1]]
+    assert ("Gateway_decision_p1", "Gateway_route", "needs check") in flows
+    assert bp.visualizations["bpmn_mapping"]["Gateway_decision_p1"]["kind"] == "decision_point"
 
 
 def test_a_decision_step_with_one_successor_and_an_ordinary_fork_are_drawn_as_before():

@@ -108,6 +108,86 @@ def test_an_unknown_step_is_named_and_a_manual_step_counts_as_a_step():
     ]
 
 
+def _with_decision_steps(*decisions):
+    """extract -> check (a step of type "decision") -> accept | ask_more; and
+    pre -> route (decision) -> manager | report, as in a live run."""
+    steps = [
+        {"id": "extract", "name": "Extract"},
+        {"id": "check", "name": "Complete?", "type": "decision", "depends_on": ["extract"]},
+        {"id": "accept", "name": "Accept", "depends_on": ["check"]},
+        {"id": "ask_more", "name": "Ask more", "depends_on": ["check"]},
+        {"id": "pre", "name": "Pre", "depends_on": ["accept"]},
+        {"id": "route", "name": "Route", "type": "decision", "depends_on": ["pre"]},
+        {"id": "manager", "name": "Manager", "depends_on": ["route"]},
+        {"id": "report", "name": "Report", "depends_on": ["route", "manager"]},
+    ]
+    return {"workflow": {"steps": steps}, "business_process": {"decision_points": list(decisions)}}
+
+
+def _point(pid, after, *targets):
+    return {
+        "id": pid,
+        "name": pid,
+        "after": after,
+        "branches": [{"condition": t, "target": t} for t in targets],
+    }
+
+
+def test_a_decision_point_after_a_decision_step_repeats_its_choice():
+    problems = session_service.process_reference_problems(
+        _with_decision_steps(_point("p", "check", "accept", "ask_more"))
+    )
+
+    assert problems == [
+        (
+            "business_process.decision_points[0]",
+            "p",
+            'repeats the choice of the step of type "decision" "check": '
+            "write the choice once, as that step or as this decision point",
+        )
+    ]
+
+
+def test_a_decision_point_before_a_decision_step_with_its_targets_repeats_its_choice():
+    """The live run: a point after pre leading to route's own dependents."""
+    problems = session_service.process_reference_problems(
+        _with_decision_steps(_point("p", "pre", "manager", "report"))
+    )
+
+    assert [p[2] for p in problems] == [
+        'repeats the choice of the step of type "decision" "route": '
+        "write the choice once, as that step or as this decision point"
+    ]
+
+
+def test_a_decision_point_before_a_decision_step_that_skips_it_is_its_own_choice():
+    """A point after pre leading to route itself or past it is a choice of its own."""
+    problems = session_service.process_reference_problems(
+        _with_decision_steps(_point("p", "pre", "route", "report"))
+    )
+
+    assert problems == []
+
+
+def test_two_decision_points_after_one_step_are_reported_on_the_second():
+    problems = session_service.process_reference_problems(
+        _draft(
+            [
+                AUTO_APPROVAL,
+                dict(AUTO_APPROVAL, id="again", name="Again?", branches=AUTO_APPROVAL["branches"]),
+            ]
+        )
+    )
+
+    assert problems == [
+        (
+            "business_process.decision_points[1]",
+            "Again?",
+            'another decision point is already after "route"',
+        )
+    ]
+
+
 def test_a_branch_without_a_target_is_reported():
     decision = dict(
         AUTO_APPROVAL, branches=[{"target": "erp"}, {"condition": "else", "target": ""}]

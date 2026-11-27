@@ -987,13 +987,7 @@ class _BpmnBuilder:
             after_node = self._lookup_node_for_step(dp.after)
             if not after_node:
                 continue
-            if self.nodes[after_node].tag == "bpmn:exclusiveGateway":
-                # After a step of type "decision": the step's own gateway decides,
-                # and the decision point's branches name its ways. The gateway
-                # keeps the step's mapping, so it is edited as the step.
-                xg = after_node
-                outgoing = [f for f in self.flows if f.src == xg and not f.is_loop]
-            elif dp.after in self._approval_of:
+            if dp.after in self._approval_of:
                 # After a review: the decision comes after the approval, on its
                 # "Yes"; the "No" and any rework path stay with the approval.
                 approval, yes_flows = self._approval_of[dp.after]

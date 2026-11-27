@@ -2346,8 +2346,10 @@ def _process_references_note(session) -> str | None:
         told = f"{told}; and {len(problems) - MAX_PROCESS_REFERENCE_PROBLEMS} more"
     draft_file = artifact_sync.DRAFT_BLUEPRINT_FILE
     return (
-        f"[The diagram cannot draw these decisions and paths in {draft_file}, so they are "
-        f'missing from it: {told}. Fix them in {draft_file}: a decision point needs "after" '
+        f"[The diagram cannot draw these decisions and paths in {draft_file} as written, so "
+        f"they are missing from it or drawn twice: {told}. Fix them in {draft_file}: each "
+        'choice once (a step of type "decision" or a decision point, one decision point '
+        'after a step); a decision point needs "after" '
         "set to the id of the step it follows and at least two branches, each written as "
         '{"condition": "...", "target": "<step id or end>"} (no other keys: "label" or "to" '
         'are not read); a path in exceptions needs "attached_to" set to the id of its '
