@@ -886,12 +886,44 @@ class _BpmnBuilder:
 
     # -- enrichment: integration target -> data store + send task ---------
 
+    def _own_report_steps(self) -> List[str]:
+        """The workflow steps that write the report themselves: each outputs a
+        *generated* artifact of type pdf or report that it produces. An upload
+        step's PDF (``source: user_upload``) is not one."""
+        out = []
+        for s in self.bp.workflow.steps:
+            for art_id in s.outputs:
+                art = self.bp.artifacts.get(art_id)
+                if (
+                    art is not None
+                    and str(art.type).lower() in ("pdf", "report")
+                    and str(getattr(art.source, "value", art.source)).lower() == "generated"
+                    and art.produced_by == s.id
+                ):
+                    out.append(s.id)
+                    break
+        return out
+
+    def _own_submission_steps(self, target: Optional[str] = None) -> List[str]:
+        """The workflow steps that send to an integration target themselves: their
+        ``parameters.integration_target`` is the target's exact name (any target
+        when ``target`` is None)."""
+        spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
+        known = [str(t) for t in spec.get("integration_targets") or []]
+        out = []
+        for s in self.bp.workflow.steps:
+            marked = (s.parameters or {}).get("integration_target")
+            if isinstance(marked, str) and marked in known and (target is None or marked == target):
+                out.append(s.id)
+        return out
+
     def _enrich_integration(self) -> None:
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
         targets = spec.get("integration_targets") or []
         if not targets:
             return
         for idx, target in enumerate(targets):
+            own = self._own_submission_steps(str(target))
             ds_id = f"DataStore_{_safe(target)}"
             ds_name = _humanize_token(target)
             # Persistent repositories use clean names (e.g. "Incident Reporting Database").
@@ -901,6 +933,15 @@ class _BpmnBuilder:
                 ds_label = ds_name
             self.data_stores.append((ds_id, ds_label, target))
             self._map(ds_id, "data_store", f"technical_spec.integration_targets[{idx}]")
+
+            if own:
+                # The agent's own step sends to this target: it writes the data
+                # store, and no "Submit to …" task is added beside it.
+                for sid in own:
+                    node = self._lookup_node_for_step(sid)
+                    if node:
+                        self.nodes[node].data_out.append((self._next_assoc_id(), ds_id))
+                continue
 
             send_id = self._free_id(f"Activity_submit_{_safe(target)}")
             self._send_task_of[str(target)] = send_id
@@ -946,15 +987,22 @@ class _BpmnBuilder:
         spliced *after* the PDF -- the natural "generate the report, then submit
         it" order.
 
-        Nothing is added when the workflow already contains an explicit step whose
-        id or component names a PDF/report generator (case-insensitive), so
-        intentionally modelled blueprints are never double-counted.
+        Nothing is added when the workflow already has a step that writes the
+        report (`_own_report_steps`: a generated pdf/report artifact it
+        produces), or, as before, a step whose id or component names a PDF/report
+        generator (case-insensitive), so intentionally modelled blueprints are
+        never double-counted. What the agent wrote is trusted: a report step on
+        one branch only is not copied onto the others. When a step of the agent's
+        own sends to an integration target (`_own_submission_steps`), the
+        generated report goes in front of it, not after it.
         """
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
         out = spec.get("output_types") or []
         if isinstance(out, str):
             out = [out]
         if not any(str(o).lower() in ("pdf", "report") for o in out):
+            return
+        if self._own_report_steps():
             return
 
         # Skip if an explicit PDF generation step is already in the workflow.
@@ -979,6 +1027,19 @@ class _BpmnBuilder:
         )
         self.nodes[pdf_id] = pdf_node
         self._map(pdf_id, "pdf_generation", "derived:pdf_output")
+
+        # The agent's own submission step: the report is generated before it.
+        senders = self._own_submission_steps()
+        if senders:
+            node = self._lookup_node_for_step(senders[0])
+            join = f"Gateway_join_{_safe(senders[0])}"
+            entry = join if join in self.nodes else node
+            into = [f for f in self.flows if f.tgt == entry and not f.is_loop]
+            if into:
+                for f in into:
+                    f.tgt = pdf_id
+                self._add_flow(pdf_id, entry)
+                return
 
         # The one way into the success end: the approved ("Yes") flow when a review
         # is the only way to finish, else the point where all the ways meet, so

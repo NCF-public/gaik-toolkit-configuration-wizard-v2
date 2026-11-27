@@ -284,8 +284,10 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
     process = data.get("business_process")
     workflow = data.get("workflow")
     steps = _dicts(workflow.get("steps")) if isinstance(workflow, dict) else []
-    if not isinstance(process, dict) or not steps:
+    if not steps:
         return []
+    if not isinstance(process, dict):
+        process = {}
     step_ids = {_ref(s.get("id")) for s in steps + _dicts(process.get("manual_steps"))}
     step_ids.discard("")
     # Steps of type "decision", and each step's dependents, for a choice written twice.
@@ -366,7 +368,90 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
         outcome = _ref(path_item.get("outcome"))
         if outcome.startswith("loop_to:") and outcome.split(":", 1)[1].strip() not in step_ids:
             problems.append((path, name, f'outcome names no step: "{outcome}"'))
+    problems.extend(_own_report_and_submission_hints(data, steps))
     return problems
+
+
+#: Words of an integration target's name too common to tie a step to it.
+_TARGET_STOPWORDS = frozenset(
+    "the and for with from into data system systems database repository store service api "
+    "approved record records invoice invoices".split()
+)
+_REPORT_WORDS = re.compile(r"report|raportti|pdf", re.IGNORECASE)
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.split(r"[^0-9a-zäöå]+", text.lower()) if len(w) >= 3}
+
+
+def _own_report_and_submission_hints(data: dict, steps: list[dict]) -> list[tuple[str, str, str]]:
+    """Steps that look like the report or a submission but are not marked as one.
+
+    The diagram adds a "Generate PDF report" task unless a step outputs a
+    generated pdf/report artifact it produces, and a "Submit to …" task per
+    integration target unless a step names it in
+    ``parameters.integration_target`` (solution_wizard's bpmn_generator). A step
+    the agent wrote for that work but did not mark is drawn beside a second,
+    generated one. These are hints, worded "if it does": a step is only taken
+    for the report or a submission by its id or name, which can be wrong.
+    """
+    spec = data.get("technical_spec")
+    spec = spec if isinstance(spec, dict) else {}
+    outputs = spec.get("output_types") or []
+    outputs = [outputs] if isinstance(outputs, str) else outputs
+    targets = [t for t in spec.get("integration_targets") or [] if isinstance(t, str) and t]
+    artifacts = data.get("artifacts")
+    artifacts = artifacts if isinstance(artifacts, dict) else {}
+    hints: list[tuple[str, str, str]] = []
+
+    def writes_report(step: dict) -> bool:
+        for art_id in step.get("outputs") or []:
+            art = artifacts.get(art_id) if isinstance(art_id, str) else None
+            if (
+                isinstance(art, dict)
+                and _text(art.get("type")).lower() in ("pdf", "report")
+                and _text(art.get("source")).lower() == "generated"
+                and art.get("produced_by") == step.get("id")
+            ):
+                return True
+        return False
+
+    if any(_text(o).lower() in ("pdf", "report") for o in outputs) and not any(
+        writes_report(s) for s in steps
+    ):
+        for i, step in enumerate(steps):
+            if _REPORT_WORDS.search(f"{_text(step.get('id'))} {_text(step.get('name'))}"):
+                hints.append(
+                    (
+                        f"workflow.steps[{i}]",
+                        _text(step.get("name")) or _text(step.get("id")),
+                        "looks like the step that writes the PDF report: if it is, give it an "
+                        'output artifact of type "pdf" with source "generated" and produced_by '
+                        "this step, so the diagram does not add a second report",
+                    )
+                )
+                break
+
+    marked = {(s.get("parameters") or {}).get("integration_target") for s in steps}
+    for target in targets:
+        if target in marked:
+            continue
+        words = _words(target) - _TARGET_STOPWORDS
+        for i, step in enumerate(steps):
+            if (step.get("parameters") or {}).get("integration_target"):
+                continue
+            if words & _words(f"{_text(step.get('id'))} {_text(step.get('name'))}"):
+                hints.append(
+                    (
+                        f"workflow.steps[{i}]",
+                        _text(step.get("name")) or _text(step.get("id")),
+                        f'looks like it sends to the integration target "{target}": if it does, '
+                        f'set parameters.integration_target to "{target}", so the diagram does '
+                        "not add a second submission",
+                    )
+                )
+                break
+    return hints
 
 
 def _assumptions_from_draft(data: dict | None) -> list[AssumptionItem]:

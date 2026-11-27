@@ -198,6 +198,90 @@ def test_two_decision_points_after_one_step_are_reported_on_the_second():
     ]
 
 
+ERP_TARGET = "ERP system (approved invoice data)"
+
+
+def _with_report_and_send(
+    *, report_art=None, send_params=None, targets=(ERP_TARGET,), outputs=("pdf",)
+):
+    """The live run's shape: invoice_pdf_report writes the report, erp_submission
+    sends to the ERP."""
+    artifacts = {"invoice_pdf": {"type": "pdf", "source": "user_upload"}}
+    if report_art is not None:
+        artifacts["invoice_report"] = report_art
+    steps = [
+        {"id": "upload", "name": "Upload", "outputs": ["invoice_pdf"]},
+        {
+            "id": "invoice_pdf_report",
+            "name": "Create the PDF report",
+            "outputs": ["invoice_report"],
+        },
+        {"id": "erp_submission", "name": "Submit to the ERP", "parameters": send_params or {}},
+    ]
+    return {
+        "technical_spec": {"output_types": list(outputs), "integration_targets": list(targets)},
+        "artifacts": artifacts,
+        "workflow": {"steps": steps},
+        "business_process": {},
+    }
+
+
+GENERATED_PDF = {"type": "pdf", "source": "generated", "produced_by": "invoice_pdf_report"}
+
+
+def test_steps_marked_as_the_report_and_the_submission_are_not_reported():
+    draft = _with_report_and_send(
+        report_art=GENERATED_PDF, send_params={"integration_target": ERP_TARGET}
+    )
+
+    assert session_service.process_reference_problems(draft) == []
+
+
+def test_an_unmarked_submission_step_is_asked_for_its_target():
+    problems = session_service.process_reference_problems(
+        _with_report_and_send(report_art=GENERATED_PDF)
+    )
+
+    assert problems == [
+        (
+            "workflow.steps[2]",
+            "Submit to the ERP",
+            f'looks like it sends to the integration target "{ERP_TARGET}": if it does, set '
+            f'parameters.integration_target to "{ERP_TARGET}", so the diagram does not add a '
+            "second submission",
+        )
+    ]
+
+
+def test_a_report_step_without_a_generated_pdf_is_asked_for_one():
+    problems = session_service.process_reference_problems(
+        _with_report_and_send(send_params={"integration_target": ERP_TARGET})
+    )
+
+    assert problems == [
+        (
+            "workflow.steps[1]",
+            "Create the PDF report",
+            "looks like the step that writes the PDF report: if it is, give it an output "
+            'artifact of type "pdf" with source "generated" and produced_by this step, so the '
+            "diagram does not add a second report",
+        )
+    ]
+
+
+def test_no_hint_without_a_pdf_output_or_an_integration_target():
+    assert (
+        session_service.process_reference_problems(_with_report_and_send(targets=(), outputs=()))
+        == []
+    )
+
+
+def test_a_target_whose_words_no_step_shares_gets_no_hint():
+    draft = _with_report_and_send(report_art=GENERATED_PDF, targets=("archive_system",))
+
+    assert session_service.process_reference_problems(draft) == []
+
+
 def test_a_branch_without_a_target_is_reported():
     decision = dict(
         AUTO_APPROVAL, branches=[{"target": "erp"}, {"condition": "else", "target": ""}]
