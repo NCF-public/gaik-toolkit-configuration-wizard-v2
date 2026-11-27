@@ -258,6 +258,15 @@ def _as_dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _true(value: Any) -> bool:
+    """A boolean as the blueprint model reads it (pydantic's lax mode)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return isinstance(value, str) and value.strip().lower() in ("true", "1", "yes", "on", "t", "y")
+
+
 def wants_report(output_types: Any) -> bool:
     """``technical_spec.output_types`` asks for a PDF report."""
     out = [output_types] if isinstance(output_types, str) else _as_list(output_types)
@@ -279,7 +288,7 @@ def final_report_step_ids(steps: Any, artifacts: Any) -> List[str]:
             if (
                 str(art.get("type")).lower() in ("pdf", "report")
                 and str(getattr(source, "value", source)).lower() == "generated"
-                and art.get("final_output") is True
+                and _true(art.get("final_output"))
                 and art.get("produced_by") == step.get("id")
             ):
                 out.append(step.get("id"))
@@ -299,8 +308,12 @@ def named_report_step(steps: Any) -> bool:
 
 
 def integration_marker(step: Any) -> Optional[str]:
-    """The step's ``parameters.integration_target``, when it is a string."""
-    marker = _as_dict(_as_dict(step).get("parameters")).get("integration_target")
+    """The step's ``parameters.integration_target``, when it is a string and the
+    step is not of type "decision"."""
+    step = _as_dict(step)
+    if step.get("type") == "decision":  # drawn as a gateway: it sends nothing
+        return None
+    marker = _as_dict(step.get("parameters")).get("integration_target")
     return marker if isinstance(marker, str) and marker else None
 
 
@@ -974,6 +987,7 @@ class _BpmnBuilder:
         return [
             {
                 "id": s.id,
+                "type": str(getattr(s.type, "value", s.type)),
                 "component": s.component,
                 "outputs": list(s.outputs or []),
                 "parameters": s.parameters,
@@ -1210,51 +1224,61 @@ class _BpmnBuilder:
             todo.extend(fwd.get(n, []))
         return seen
 
-    def _joins_after(self, fwd: Dict[str, List[str]], node: str) -> bool:
-        """A parallel join waits on the way on from ``node``: a token that
-        enters there alone would wait at it for ever."""
-        indeg: Dict[str, int] = {}
-        for outs in fwd.values():
-            for t in outs:
-                indeg[t] = indeg.get(t, 0) + 1
-        return any(
-            n != node
-            and self.nodes.get(n) is not None
-            and self.nodes[n].tag == "bpmn:parallelGateway"
-            and indeg.get(n, 0) > 1
-            for n in self._reach(fwd, node)
-        )
+    def _runs_anyway(self, fwd: Dict[str, List[str]], order: List[str]) -> set:
+        """The nodes every successful run passes, whatever is chosen on the way.
 
-    def _merge_before(self, node: str) -> str:
-        """An exclusive gateway in front of ``node`` that its forward flows, and
-        a decision's shortcut, meet at (one per node)."""
-        mid = f"Gateway_merge_{_safe(node)}"
-        if mid in self.nodes:
-            return mid
-        self.nodes[mid] = _Node(mid, "bpmn:exclusiveGateway", "", self.nodes[node].lane, "gateway")
-        self._map(mid, "merge_gateway", f"derived:merge_before:{node}")
-        for f in [f for f in self.flows if f.tgt == node and not f.is_loop]:
-            f.tgt = mid
-        self._add_flow(mid, node)
-        return mid
+        Walked in the drawn order from the start: a choice (an exclusive gateway
+        with more than one way on that does not just end the case elsewhere)
+        stops it, and a parallel join is passed only when all its ways are.
+        A step beside a decision on a fork, with no choice before it, is one.
+        """
+        preds: Dict[str, List[str]] = {}
+        for src, outs in fwd.items():
+            for t in outs:
+                preds.setdefault(t, []).append(src)
+
+        def chooses(n: str) -> bool:
+            node = self.nodes.get(n)
+            if node is None or node.tag != "bpmn:exclusiveGateway":
+                return False
+            live = {
+                t
+                for t in fwd.get(n, [])
+                if not (
+                    t != "EndEvent_success"
+                    and self.nodes.get(t) is not None
+                    and self.nodes[t].tag == "bpmn:endEvent"
+                )
+            }
+            return len(live) > 1
+
+        anyway: set = set()
+        for n in order:
+            if n == "StartEvent_1":
+                anyway.add(n)
+                continue
+            ps = preds.get(n, [])
+            given = [p for p in ps if p in anyway and not chooses(p)]
+            node = self.nodes.get(n)
+            if node is not None and node.tag == "bpmn:parallelGateway" and len(set(ps)) > 1:
+                if len(given) == len(ps):
+                    anyway.add(n)
+            elif given:
+                anyway.add(n)
+        return anyway
 
     def _route_end_branches(self) -> None:
         """A decision's branch to "end" means done, through the report and the
         delivery. With the agent's own report or send steps there is no
-        generated box at the end that it would pass, so:
-
-        - It leads into the first of those steps (in the drawn order) that only
-          the decision leads to: every forward way from the start to it passes
-          the decision, so it is not running beside it on another way of a fork,
-          not before it, and not behind a join the shortcut would skip; and no
-          parallel join waits after it. The shortcut and the step's own way meet
-          at an exclusive gateway in front of the step.
-        - What the branch would still skip (the report or a submission that
-          only the decision's other branches pass) is drawn on the branch as a
-          generated box, so every successful path passes the report and each
-          submission once. With no step it can lead into, that is all of them.
-
-        An own step before the decision, or beside it, is passed anyway.
+        generated box at the end that it would pass, so a branch to "end" whose
+        run would not pass them gets generated boxes of its own: the report
+        unless one of the agent's report steps comes before the decision on
+        every way to it, or runs whatever is chosen (`_runs_anyway`); and a
+        submission per target on the same terms. The branch still ends: it never
+        enters the agent's steps, which could lead it through a review or a
+        second submission. So every successful run passes the report and each
+        submission once, at the cost of a generated box beside the agent's own
+        on the decision's other branches.
         """
         reports = [n for n in map(self._lookup_node_for_step, self._own_report_steps()) if n]
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
@@ -1263,48 +1287,24 @@ class _BpmnBuilder:
             nodes = [n for n in map(self._lookup_node_for_step, self._own_submission_steps(str(t)))]
             if any(nodes):
                 sends[str(t)] = [n for n in nodes if n]
-        own = set(reports).union(*sends.values())
-        if not own:
+        if not reports and not sends:
             return
-        # The last decision first: an earlier one's shortcut then sees the
-        # later one's branch to "end" already going through the own steps.
-        _, first_order = self._forward_graph()
-        rank = {n: i for i, n in enumerate(first_order)}
-        branches = sorted(self._end_branches, key=lambda b: -rank.get(b[1], -1))
-        for dp_id, xg, flow in branches:
+        fwd, order = self._forward_graph()
+        anyway = self._runs_anyway(fwd, order)
+        for dp_id, xg, flow in self._end_branches:
             if flow not in self.flows or flow.src != xg or flow.tgt != "EndEvent_success":
                 continue
-            fwd, order = self._forward_graph()
             if xg not in order:
                 continue
-            not_via_xg = self._reach(fwd, "StartEvent_1", removed=xg)
-            after = {n for n in self._reach(fwd, xg) if n != xg and n not in not_via_xg}
-            entry = next(
-                (n for n in order if n in own and n in after and not self._joins_after(fwd, n)),
-                None,
-            )
-            passed = set()
-            if entry is not None:
-                # The own steps every way on from the entry to the end passes.
-                passed = {
-                    n
-                    for n in own
-                    if n == entry
-                    or (
-                        n in self._reach(fwd, entry)
-                        and "EndEvent_success" not in self._reach(fwd, entry, removed=n)
-                    )
-                }
-            need_report = (
-                bool(reports) and all(n in after for n in reports) and not (set(reports) & passed)
-            )
-            need_sends = [
-                t
-                for t, nodes in sends.items()
-                if all(n in after for n in nodes) and not (set(nodes) & passed)
-            ]
-            if entry is not None:
-                flow.tgt = self._merge_before(entry)
+
+            def passed(nodes: List[str], xg: str = xg) -> bool:
+                return any(
+                    n in anyway or xg not in self._reach(fwd, "StartEvent_1", removed=n)
+                    for n in nodes
+                )
+
+            need_report = bool(reports) and not passed(reports)
+            need_sends = [t for t, nodes in sends.items() if not passed(nodes)]
             self._splice_branch_boxes(flow, dp_id, need_report, need_sends)
 
     def _splice_branch_boxes(
