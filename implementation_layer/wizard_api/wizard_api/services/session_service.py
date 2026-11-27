@@ -380,13 +380,14 @@ _TARGET_STOPWORDS = frozenset(
 _REPORT_WORDS = re.compile(r"report|raport|pdf", re.IGNORECASE)
 #: A step writes the report when its name says so, not when it reads or reviews one.
 _WRITE_WORDS = re.compile(
-    r"\b(generat|creat|writ|render|mak|compos|produc|build|laadi|laati|laadin|luo(da|daan)?\b"
-    r"|muodost|tuota|tuott|kirjoit)",
+    r"\b(generat|creat|writ|render|mak|compos|produc|prepar|build|laadi|laati|laadin"
+    r"|luo(da|daan)?\b|muodost|tuota|tuott|kirjoit|koost)",
     re.IGNORECASE,
 )
 #: A step sends to a target when its name says so, not when it looks something up there.
 _SEND_WORDS = re.compile(
-    r"\b(submi|send|export|deliver|transfer|forward|sync|vie(\b|d|n)|lähet|siirr|siirt|toimit)",
+    r"\b(submi|send|export|deliver|transfer|forward|post(s|ed|ing)?\b|vie(\b|d|n)|lähet"
+    r"|siirr|siirt|tallenn)",
     re.IGNORECASE,
 )
 #: Steps a person does: never the generated report or submission.
@@ -434,7 +435,8 @@ def _own_report_and_submission_hints(data: dict, steps: list[dict]) -> list[tupl
     hints: list[tuple[str, str, str]] = []
 
     def writes_report(step: dict) -> bool:
-        for art_id in step.get("outputs") or []:
+        outputs = step.get("outputs")
+        for art_id in outputs if isinstance(outputs, list) else []:
             art = artifacts.get(art_id) if isinstance(art_id, str) else None
             if (
                 isinstance(art, dict)

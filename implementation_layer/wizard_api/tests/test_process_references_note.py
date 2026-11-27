@@ -453,3 +453,33 @@ def test_parameters_that_are_not_an_object_do_not_drop_the_note():
     problems = session_service.process_reference_problems(draft)
 
     assert [(p, n) for p, n, _ in problems] == [("workflow.steps[2]", "Submit to the ERP")]
+
+
+def test_outputs_that_are_not_a_list_do_not_drop_the_note():
+    draft = _with_report_and_send(report_art=GENERATED_PDF)
+    _steps(draft)[0]["outputs"] = 5
+
+    problems = session_service.process_reference_problems(draft)
+
+    assert [(p, n) for p, n, _ in problems] == [("workflow.steps[2]", "Submit to the ERP")]
+
+
+def test_a_sync_from_the_target_or_a_supplier_step_is_not_taken_for_the_submission():
+    draft = _with_report_and_send(report_art=GENERATED_PDF)
+    _steps(draft)[2:3] = [
+        {"id": "vendors", "name": "Sync vendor master from ERP"},
+        {"id": "supplier", "name": "Toimittajan tiedot ERP:stä"},
+    ]
+
+    assert session_service.process_reference_problems(draft) == []
+
+
+def test_posting_to_the_target_is_taken_for_the_submission():
+    draft = _with_report_and_send(report_art=GENERATED_PDF)
+    _steps(draft)[2] = {"id": "post", "name": "Post the invoice to the ERP"}
+
+    problems = session_service.process_reference_problems(draft)
+
+    assert [(p, n) for p, n, _ in problems] == [
+        ("workflow.steps[2]", "Post the invoice to the ERP")
+    ]

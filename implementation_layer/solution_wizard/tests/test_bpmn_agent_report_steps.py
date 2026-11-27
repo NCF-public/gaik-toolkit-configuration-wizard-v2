@@ -353,3 +353,52 @@ def test_the_generated_report_goes_between_the_join_and_the_own_send_step():
     assert ("Activity_generate_pdf", "Activity_deliver") in flows
     assert ("Activity_extract", join) in flows
     assert ("Activity_classify", join) in flows
+
+
+def test_a_branch_to_end_is_not_led_into_an_own_step_beside_the_decision():
+    """The report runs beside the step the decision is after (both follow a fork):
+    the decision's branch to "end" ends, and the report is entered once."""
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("make_doc", deps=["extract"], inputs=["record"], outputs=["report_pdf"]),
+        _step("notify", deps=["extract"]),
+        _step("escalate", deps=["notify"]),
+    ]
+    arts = {**BASE_ARTS, "report_pdf": _art("pdf", "make_doc", final=True)}
+    decision = {
+        "id": "esc",
+        "name": "Escalate?",
+        "after": "notify",
+        "branches": [
+            {"condition": "no", "target": "end"},
+            {"condition": "yes", "target": "escalate"},
+        ],
+    }
+    flows, _, _ = _flows(_blueprint(steps, arts, targets=(), decisions=[decision]))
+
+    assert ("Gateway_decision_esc", "Activity_make_doc") not in flows
+    assert sum(1 for _, b in flows if b == "Activity_make_doc") == 1
+
+
+def test_a_rework_branch_does_not_lead_end_into_a_report_before_the_decision():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("make_doc", deps=["extract"], inputs=["record"], outputs=["report_pdf"]),
+        _step("check", deps=["make_doc"]),
+    ]
+    arts = {**BASE_ARTS, "report_pdf": _art("pdf", "make_doc", final=True)}
+    decision = {
+        "id": "ok",
+        "name": "Fine?",
+        "after": "check",
+        "branches": [
+            {"condition": "yes", "target": "end"},
+            {"condition": "no", "target": "extract"},
+        ],
+    }
+    flows, _, _ = _flows(_blueprint(steps, arts, targets=(), decisions=[decision]))
+
+    assert ("Gateway_decision_ok", END) in flows
+    assert ("Gateway_decision_ok", "Activity_make_doc") not in flows

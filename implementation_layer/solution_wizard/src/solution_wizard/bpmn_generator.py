@@ -1081,7 +1081,9 @@ class _BpmnBuilder:
             # step itself, or the join before it when it depends on several.
             # A branch to "end" means done, through the report and the delivery:
             # with the agent's own steps for them, it leads into the first of them.
-            finish = self._own_finish_step(dp.after)
+            finish = self._own_finish_step(
+                dp.after, [br.target for br in dp.branches if br.target not in ("end", "")]
+            )
             ids = [
                 finish if br.target in ("end", "") and finish else br.target for br in dp.branches
             ]
@@ -1108,15 +1110,30 @@ class _BpmnBuilder:
                 else:
                     self._add_flow(xg, tgt, name=br.condition)
 
-    def _own_finish_step(self, after: str) -> Optional[str]:
-        """The first of the agent's own report and send steps that a decision
-        after ``after`` has not passed yet: where its branch to "end" leads, so
-        that the case is still reported and delivered. None when there is none,
-        or when all of them come before the decision (the branch then ends, and
-        no loop back is drawn)."""
+    def _own_finish_step(self, after: str, branch_targets: List[str]) -> Optional[str]:
+        """The first of the agent's own report and send steps that comes after a
+        decision after ``after``: where its branch to "end" leads, so that the
+        case is still reported and delivered. A step comes after the decision when
+        it depends, directly or through other steps, on ``after`` or on one of
+        the decision's branch targets; one beside the decision (on another way of
+        a fork) or before it does not. None when there is no such step: the
+        branch then ends, and no loop back or second way into a step is drawn."""
         own = set(self._own_report_steps()) | set(self._own_submission_steps())
         if not own:
             return None
+        dependents: Dict[str, List[str]] = {}
+        for s in self.bp.workflow.steps:
+            for d in s.depends_on or []:
+                dependents.setdefault(d, []).append(s.id)
+        later, todo = set(), [after, *branch_targets]
+        while todo:
+            sid = todo.pop()
+            if sid in later:
+                continue
+            later.add(sid)
+            todo.extend(dependents.get(sid, []))
+        # A branch back to an earlier step (rework) reaches steps before the
+        # decision too: those are passed already.
         deps = {s.id: list(s.depends_on or []) for s in self.bp.workflow.steps}
         before, todo = set(), [after]
         while todo:
@@ -1126,7 +1143,7 @@ class _BpmnBuilder:
             before.add(sid)
             todo.extend(deps.get(sid, []))
         for s in self.bp.workflow.steps:
-            if s.id in own and s.id not in before:
+            if s.id in own and s.id in later and s.id not in before:
                 return s.id
         return None
 
