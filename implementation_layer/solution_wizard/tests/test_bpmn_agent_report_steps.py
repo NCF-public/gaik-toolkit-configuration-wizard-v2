@@ -541,23 +541,15 @@ def test_a_marker_on_a_decision_step_is_not_taken_for_the_submission():
 
 
 def test_the_shared_rules_read_final_output_as_the_blueprint_does():
-    from solution_wizard.bpmn_generator import report_box_needed
+    from solution_wizard.bpmn_generator import final_report_step_ids
 
-    draft = {
-        "technical_spec": {"output_types": ["pdf"]},
-        "artifacts": {
-            "r": {
-                "type": "pdf",
-                "source": "generated",
-                "produced_by": "make",
-                "final_output": "true",
-            }
-        },
-        "workflow": {"steps": [{"id": "make", "outputs": ["r"]}]},
+    arts = {
+        "r": {"type": "pdf", "source": "generated", "produced_by": "make", "final_output": "true"}
     }
-    assert report_box_needed(draft) is False
-    draft["artifacts"]["r"]["final_output"] = "false"
-    assert report_box_needed(draft) is True
+    steps = [{"id": "make", "outputs": ["r"]}]
+    assert final_report_step_ids(steps, arts) == ["make"]
+    arts["r"]["final_output"] = "false"
+    assert final_report_step_ids(steps, arts) == []
 
 
 # -- the reviewed shapes draw as develop does -----------------------------------

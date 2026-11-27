@@ -246,7 +246,7 @@ def _safe(token: str) -> str:
 # ---------------------------------------------------------------------------
 # The generated report and submission boxes: when the diagram adds them.
 # Plain dicts (a blueprint's JSON, or a draft that does not validate), so that
-# wizard_api's draft note uses the same rules as the drawing.
+# wizard_api's draft note reads a marker as the drawing does.
 # ---------------------------------------------------------------------------
 
 
@@ -315,30 +315,6 @@ def integration_marker(step: Any) -> Optional[str]:
         return None
     marker = _as_dict(step.get("parameters")).get("integration_target")
     return marker if isinstance(marker, str) and marker else None
-
-
-def report_box_needed(blueprint: Any) -> bool:
-    """A report is asked for and no step is marked as writing it: the diagram
-    adds a "Generate PDF report" task. (With a marked step it may still add
-    one, when a way to the end skips that step.)"""
-    bp = _as_dict(blueprint)
-    steps = _as_dict(bp.get("workflow")).get("steps")
-    return (
-        wants_report(_as_dict(bp.get("technical_spec")).get("output_types"))
-        and not final_report_step_ids(steps, bp.get("artifacts"))
-        and not named_report_step(steps)
-    )
-
-
-def submit_box_targets(blueprint: Any) -> List[str]:
-    """The integration targets no step names exactly in
-    ``parameters.integration_target``: the diagram adds a "Submit to …" task for
-    each. (For a marked target it may still add one, when a way to the end
-    skips the marked steps or a generated report would follow them.)"""
-    bp = _as_dict(blueprint)
-    marked = {integration_marker(s) for s in _as_list(_as_dict(bp.get("workflow")).get("steps"))}
-    targets = _as_list(_as_dict(bp.get("technical_spec")).get("integration_targets"))
-    return [str(t) for t in targets if str(t) not in marked]
 
 
 # ---------------------------------------------------------------------------
