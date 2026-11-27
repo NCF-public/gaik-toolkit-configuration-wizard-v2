@@ -31,9 +31,15 @@ export const NO_PREFLIGHT: PreflightState = { phase: "idle", version: null, prob
  * a failed preflight is shown as errors, not as ready. With no sandbox the
  * check never runs and the package stays "unchecked"; a check that started and
  * could not finish is "unfinished", which is not a fault in the package.
+ *
+ * "preparing" is a package that is missing or unfinished while the wizard is
+ * still replying, so still writing it (#144): the files it has not reached yet
+ * are not a fault, and the tab read them as one in red ("not ready — missing:
+ * run_poc.py still has 6 TODO markers") until the package was done.
  */
 export type PackageStatus =
   | "loading"
+  | "preparing"
   | "missing"
   | "incomplete"
   | "unchecked"
@@ -48,10 +54,14 @@ export function packageStatus(input: {
   /** The files are all there (the API's `ready`). */
   complete: boolean;
   preflight: PreflightPhase;
+  /** The wizard is replying, so it may still be writing the package. */
+  writing?: boolean;
 }): PackageStatus {
   if (!input.loaded) return "loading";
-  if (!input.generated) return "missing";
-  if (!input.complete) return "incomplete";
+  if (!input.generated || !input.complete) {
+    if (input.writing) return "preparing";
+    return input.generated ? "incomplete" : "missing";
+  }
   if (input.preflight === "running") return "checking";
   if (input.preflight === "failed") return "failed";
   if (input.preflight === "unfinished") return "unfinished";

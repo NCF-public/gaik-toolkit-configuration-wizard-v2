@@ -733,6 +733,14 @@ export type Dict = {
   };
   pocGeneratedTitle: string;
   pocNotReadyTitle: string;
+  /** Step 1 while the wizard is still writing the package (#144). */
+  pocPackagePreparing: string;
+  /** Above what the package does not have yet, behind "Package details" while it is written. */
+  pocPackageNotWrittenYet: string;
+  /** A package problem in the UI language: "{file}". */
+  pocProblemMissing: string;
+  /** "{file}", "{n}" TODO marks, the first on "{line}". */
+  pocProblemUnfinished: string;
   pocDownload: string;
   pocNotGenerated: string;
   /** While the PoC tab is still asking whether a package exists. */
@@ -1752,7 +1760,11 @@ const fi: Dict = {
     },
   },
   pocGeneratedTitle: "Generoitu PoC-paketti",
-  pocNotReadyTitle: "PoC-paketti ei ole valmis — puuttuu:",
+  pocNotReadyTitle: "PoC-paketti ei ole valmis:",
+  pocPackagePreparing: "Wizard kirjoittaa pakettia…",
+  pocPackageNotWrittenYet: "Vielä kirjoittamatta:",
+  pocProblemMissing: "{file} puuttuu",
+  pocProblemUnfinished: "{file} on kesken: siinä on vielä TODO-merkintöjä ({n}, ensimmäinen rivillä {line})",
   pocDownload: "Lataa työversio",
   pocNotGenerated:
     "PoC-pakettia ei ole vielä generoitu. Se syntyy kun wizard etenee Gate 3:een asti.",
@@ -2844,7 +2856,11 @@ const en: Dict = {
     },
   },
   pocGeneratedTitle: "Generated PoC package",
-  pocNotReadyTitle: "The PoC package is not ready — missing:",
+  pocNotReadyTitle: "The PoC package is not ready:",
+  pocPackagePreparing: "The wizard is writing the package…",
+  pocPackageNotWrittenYet: "Not written yet:",
+  pocProblemMissing: "{file} is missing",
+  pocProblemUnfinished: "{file} is unfinished: it still has TODO marks ({n}, the first on line {line})",
   pocDownload: "Download working copy",
   pocNotGenerated:
     "The PoC package has not been generated yet. It appears once the wizard reaches Gate 3.",

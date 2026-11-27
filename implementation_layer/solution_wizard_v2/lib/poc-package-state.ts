@@ -1,3 +1,5 @@
+import { fillTemplate } from "./chat-template";
+
 /**
  * What the PoC tab knows about the generated package.
  *
@@ -140,4 +142,23 @@ export function samePocPackage(a: PocPackageState, b: PocPackageState): boolean 
     a.packageFiles.length === b.packageFiles.length &&
     a.packageFiles.every((f, i) => f === b.packageFiles[i])
   );
+}
+
+/**
+ * A package problem as the tab says it (#144). wizard_api writes its problems
+ * in English for the agent as much as for the user ("run_poc.py still has 6
+ * TODO marker(s), first at line 326: the package is not finished"), and the
+ * tab showed them as they were, also in the Finnish UI. The two that every
+ * unfinished package has, a missing file and an entrypoint still marked TODO,
+ * are said in the UI language; any other comes as the server wrote it.
+ */
+export function pocProblemText(
+  problem: string,
+  words: { missing: string; unfinished: string },
+): string {
+  const missing = /^(\S+) is missing$/.exec(problem);
+  if (missing) return fillTemplate(words.missing, { file: missing[1] });
+  const todo = /^(\S+) still has (\d+) TODO marker\(s\), first at line (\d+)\b/.exec(problem);
+  if (todo) return fillTemplate(words.unfinished, { file: todo[1], n: todo[2], line: todo[3] });
+  return problem;
 }

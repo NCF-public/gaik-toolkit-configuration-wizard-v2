@@ -158,4 +158,44 @@ test.describe("PoC package status", () => {
     await expect(status).not.toContainText("Valmis ajettavaksi");
     await expect(status).toHaveAttribute("data-state", "ready", { timeout: 10_000 });
   });
+
+  test("a package the wizard is still writing reads as being written, not as errors (#144)", async ({ page }) => {
+    await page.route(`**/api/sessions/${SESSION}/poc/files`, (route) =>
+      route.fulfill({
+        json: {
+          generated: true,
+          ready: false,
+          problems: [
+            "README.md is missing",
+            "run_poc.py still has 6 TODO marker(s), first at line 326: the package is not finished",
+          ],
+          files: ["run_poc.py", "requirements.txt"],
+          version: "v1",
+        },
+      }),
+    );
+    await openPocTab(page);
+    const replying = (on: boolean) =>
+      page.evaluate((detail) => window.dispatchEvent(new CustomEvent("gaik-wizard:chat-replying", { detail })), on);
+    const status = page.getByTestId("poc-package-status");
+    const said = ["README.md puuttuu", "run_poc.py on kesken: siinä on vielä TODO-merkintöjä (6, ensimmäinen rivillä 326)"];
+    await expect(status).toHaveAttribute("data-state", "incomplete");
+
+    // The wizard replies: what it has not written yet is no fault, and there
+    // is no way on (no regenerate, no download) while it writes.
+    await replying(true);
+    await expect(status).toHaveAttribute("data-state", "preparing");
+    await expect(status).toHaveText("Wizard kirjoittaa pakettia…");
+    await expect(page.getByTestId("poc-problems")).toHaveCount(0);
+    const details = page.getByTestId("poc-package-details");
+    await details.locator("summary").click();
+    await expect(details.getByTestId("poc-not-written-yet").getByRole("listitem")).toHaveText(said);
+    await expect(details.getByRole("button", { name: "Generoi paketti uudelleen" })).toBeDisabled();
+
+    // The reply ended with the package unfinished: now it is what it lacks.
+    await replying(false);
+    await expect(status).toHaveAttribute("data-state", "incomplete");
+    await expect(status).toHaveText("PoC-paketti ei ole valmis:");
+    await expect(page.getByTestId("poc-problems").getByRole("listitem")).toHaveText(said);
+  });
 });

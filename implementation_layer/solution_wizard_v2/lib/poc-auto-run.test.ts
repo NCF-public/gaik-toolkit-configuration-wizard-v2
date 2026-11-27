@@ -19,7 +19,7 @@ describe("the test run that starts by itself", () => {
   });
 
   it("waits for the package's check, and where no check can say it is ready", () => {
-    for (const packageStatus of ["loading", "missing", "incomplete", "checking", "failed", "unfinished", "unchecked"] as const) {
+    for (const packageStatus of ["loading", "preparing", "missing", "incomplete", "checking", "failed", "unfinished", "unchecked"] as const) {
       expect(autoRunDecision({ ...READY, packageStatus })).toBe("wait");
     }
     // The mock store and an older api give no version: nothing to start a run per.

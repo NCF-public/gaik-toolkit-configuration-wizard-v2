@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "./poc-package-state";
+import { NO_POC_PACKAGE, pocPackageState, pocProblemText, samePocPackage } from "./poc-package-state";
 
 describe("pocPackageState", () => {
   it("is not generated for nothing, garbage and generated:false", () => {
@@ -169,5 +169,23 @@ describe("samePocPackage", () => {
     expect(samePocPackage(ready, { ...ready, files: ["run_poc.py"] })).toBe(false);
     expect(samePocPackage(ready, { ...ready, packageFiles: ["poc/run_poc.py"] })).toBe(false);
     expect(samePocPackage(ready, { ...ready, recordedRun: "r1" })).toBe(false);
+  });
+});
+
+describe("pocProblemText", () => {
+  const words = { missing: "{file} puuttuu", unfinished: "{file} on kesken ({n}, rivi {line})" };
+
+  it("says a missing file and an entrypoint still marked TODO in the UI language", () => {
+    expect(pocProblemText("README.md is missing", words)).toBe("README.md puuttuu");
+    expect(
+      pocProblemText("run_poc.py still has 6 TODO marker(s), first at line 326: the package is not finished", words),
+    ).toBe("run_poc.py on kesken (6, rivi 326)");
+  });
+
+  it("gives any other problem as the server wrote it", () => {
+    const other = "requirements.txt does not require gaik";
+    expect(pocProblemText(other, words)).toBe(other);
+    // A file name with a space is not one the check writes; it is left alone.
+    expect(pocProblemText("my file is missing", words)).toBe("my file is missing");
   });
 });
