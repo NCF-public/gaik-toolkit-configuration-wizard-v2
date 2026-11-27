@@ -240,7 +240,9 @@ stops the run, with the command that brings it up to date. `docker-test.sh --ste
 drops and creates `wizard_test` before every run, so it starts from an empty database
 even after a local run left tables there.
 
-CI runs `.github/workflows/solution-wizard-v2.yml` on changes to wizard_api / solution_wizard_v2.
+CI runs `.github/workflows/solution-wizard-v2.yml` on changes to wizard_api / solution_wizard_v2,
+and `.github/workflows/wizard-v2-format.yml` checks the format of all of `implementation_layer/`,
+as upstream's `test.yml` does for a delivery.
 
 ---
 
@@ -252,6 +254,9 @@ npm run lint
 
 cd implementation_layer/wizard_api
 ruff check . && ruff format --check .
+
+# from the repository root, as wizard-v2-format.yml and upstream's test.yml
+uvx ruff@0.14.10 format --check implementation_layer/
 ```
 
 ---
