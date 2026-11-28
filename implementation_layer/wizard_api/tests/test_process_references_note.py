@@ -394,12 +394,31 @@ def test_target_names_in_the_agent_note_are_complete_or_refer_to_the_draft(tmp_p
         _write(str(tmp_path), draft)
         note = sessions_router._process_references_note(_session(str(tmp_path)))
         assert note is not None
+        assert "unknown" in note
         if all(name in note for name in targets):
             continue
         assert "Read technical_spec.integration_targets" in note
         assert artifact_sync.DRAFT_BLUEPRINT_FILE in note
         assert "copy an exact name" in note
         assert not any(name[:25] in note for name in targets if len(name) > 25)
+
+
+def test_shortened_target_problem_keeps_a_bounded_preview_of_a_long_marker(tmp_path):
+    marker = "invalid_" + "x" * 1000
+    draft = _with_report_and_send(
+        report_art=GENERATED_PDF,
+        send_params={"integration_target": marker},
+        targets=("ERP " + "y" * 250,),
+    )
+    _write(str(tmp_path), draft)
+    note = sessions_router._process_references_note(_session(str(tmp_path)))
+    assert note is not None
+    assert marker[:25] in note
+    assert marker not in note
+    assert "…" in note
+    assert "workflow.steps[2].parameters.integration_target" in note
+    assert "Read technical_spec.integration_targets" in note
+    assert "copy an exact name" in note
 
 
 def test_a_name_that_only_looks_like_a_step_for_the_work_gets_no_hint():

@@ -493,6 +493,29 @@ def test_review_can_approve_the_report_already_produced():
     _assert_each_finished_run_passes_once(bp, {"Activity_make_doc"}, {"Activity_deliver"})
 
 
+@pytest.mark.parametrize("report_id", ["make_doc", "make_pdf"])
+def test_review_of_record_without_the_report_keeps_the_generated_report(report_id):
+    bp = _blueprint(
+        [
+            UPLOAD,
+            EXTRACT,
+            _report(report_id, ["extract"]),
+            _step("review", "human_review", deps=[report_id], inputs=["record"]),
+            _send("deliver", ["review"]),
+        ],
+        {**BASE_ARTS, **_report_art(report_id)},
+    )
+    flows, kinds, _ = _flows(bp)
+    assert PDF in kinds
+    (sender,) = [node for node, kind in kinds.items() if kind == "sendTask"]
+    assert ("Gateway_approve_review", f"Activity_{report_id}") not in flows
+    assert ("Activity_deliver", PDF) in flows
+    assert (PDF, sender) in flows
+    mapping = bp.visualizations["bpmn_mapping"]
+    assert "done_report" not in mapping["Activity_deliver"]
+    assert "done_delivery" not in mapping["Activity_deliver"]
+
+
 @pytest.mark.parametrize(
     ("edges", "expected"),
     [
