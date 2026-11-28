@@ -363,6 +363,65 @@ export const isAudioInput = (name: string | null) => {
   return /(?<!\p{L})(?:audio|voice|recording|ääni|puhe(?!lin|lu|en))/iu.test(words);
 };
 
+/**
+ * An input a person writes rather than uploads: a question, a query, a message
+ * (#121). A blueprint has no source for typed text, so the wizard's RAG example
+ * makes the user's question an upload, and the case page offered only a file
+ * box for it: a tester wrote the question into a .txt to attach it. Told by its
+ * name, as a recording is above; a voice message is a recording.
+ *
+ * The last word decides, as the head of the name: "Questionnaire PDF",
+ * "Kyselylomake" and "Kyselyn vastaukset" are documents, "Käyttäjäkysymys" and
+ * "Tekstiviesti" are typed.
+ */
+export const isTypedInput = (name: string | null) => !isAudioInput(name) && typedKind(name) !== null;
+
+/** A typed input that is a question: each one added is one question to the run. */
+export const isQuestionInput = (name: string | null) => typedKind(name) === "question";
+
+function typedKind(name: string | null): "question" | "text" | null {
+  const words = (name ?? "")
+    .replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2")
+    .split(/[^\p{L}]+/u)
+    .filter(Boolean);
+  const head = words.at(-1) ?? "";
+  if (/^(?:questions?|quer(?:y|ies))$/iu.test(head) || /(?:kysymy(?:s|ks\p{L}*)|kysely\p{L}{0,3})$/iu.test(head)) {
+    return "question";
+  }
+  if (/^(?:prompts?|messages?)$/iu.test(head) || /viesti\p{L}{0,3}$/iu.test(head)) return "text";
+  return null;
+}
+
+/**
+ * The text a typed input goes to the case with. A question is one line: the
+ * RAG template reads each line of a question file as a question of its own,
+ * so a question typed over two lines was answered as two, the second without
+ * its context. Other text keeps its lines.
+ */
+export function typedInputText(name: string | null, text: string): string {
+  return isQuestionInput(name) ? text.replace(/\s+/g, " ").trim() : text.trim();
+}
+
+/**
+ * The file a typed input goes to the case as: the input's own name as a .txt
+ * (a run reads a question from a text file in its input folder), one the case
+ * does not have yet, since the api refuses a name it already holds.
+ */
+export function typedInputFileName(name: string | null, taken: string[]): string {
+  const stem =
+    (name ?? "")
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60) || "text";
+  const used = new Set(taken.map((t) => t.toLowerCase()));
+  let candidate = `${stem}.txt`;
+  for (let n = 2; used.has(candidate); n += 1) candidate = `${stem}_${n}.txt`;
+  return candidate;
+}
+
 const AUDIO_FILE_EXT = /\.(wav|mp3|m4a|ogg|webm)$/i;
 
 /**

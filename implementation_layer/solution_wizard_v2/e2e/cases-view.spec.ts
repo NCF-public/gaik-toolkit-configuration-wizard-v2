@@ -723,3 +723,151 @@ test.describe("cases view: direct input on first arrival (#253)", () => {
     expect(fake.created).toBe(1);
   });
 });
+
+// Questions over a product guide (#121): the question is a user task's output,
+// and the run reads it from a text file of the case.
+const QA_MODEL = {
+  title: "Ohjekirjan kysymykset",
+  spec: { schema_name: "Answer", fields: ["answer", "citations"], required_fields: ["answer"] },
+  process: {
+    lanes: [
+      { id: "L_user", name: "Käyttäjä", human: true },
+      { id: "L_ai", name: "GAIK AI", human: false },
+    ],
+    nodes: [
+      { id: "S", kind: "startEvent", name: "", lane: "L_user", inputs: [], outputs: [] },
+      { id: "T_ask", kind: "userTask", name: "Kysy kysymys", lane: "L_user", inputs: [], outputs: ["User Question"] },
+      { id: "T_answer", kind: "serviceTask", name: "Vastaa", lane: "L_ai", inputs: [], outputs: [] },
+      { id: "E", kind: "endEvent", name: "", lane: "L_user", inputs: [], outputs: [] },
+    ],
+    flows: [
+      { from: "S", to: "T_ask", name: "" },
+      { from: "T_ask", to: "T_answer", name: "" },
+      { from: "T_answer", to: "E", name: "" },
+    ],
+  },
+  reviewer: null,
+  accepted_inputs: [
+    { kind: "pdf", label: "PDF", extensions: [".pdf"] },
+    { kind: "txt", label: "TXT", extensions: [".txt"] },
+  ],
+  package_ready: true,
+  package_problems: [],
+};
+
+/**
+ * Takes the typed files posted to case 1 as wizard_api would: by the name the
+ * form gives, refusing a name the case already holds. `refuse` answers the
+ * next post with a refusal instead.
+ */
+async function takeTypedFiles(page: Page, fake: Fake) {
+  const sent: { name: string; body: string }[] = [];
+  const state = { refuse: false, order: [] as string[] };
+  await page.route(`**${CASES}/${caseId(1)}/inputs`, async (route) => {
+    const body = route.request().postDataBuffer()?.toString("utf8") ?? "";
+    const name = /filename="([^"]+)"/.exec(body)?.[1] ?? "";
+    state.order.push("input");
+    if (state.refuse) {
+      state.refuse = false;
+      return route.fulfill({ status: 415, json: { detail: { error: "input_type_not_accepted", message: "unsupported file type" } } });
+    }
+    const found = fake.cases.find((c) => c.id === caseId(1));
+    const list = found?.inputs as { name: string; bytes: number; task?: string | null }[];
+    if (list.some((f) => f.name === name)) {
+      return route.fulfill({ status: 409, json: { detail: { error: "input_exists", message: `${name} is already in the case` } } });
+    }
+    sent.push({ name, body });
+    list.push({ name, bytes: 32, task: "T_ask" });
+    return route.fulfill({ status: 201, json: { name, bytes: 32, task: "T_ask" } });
+  });
+  return { sent, state };
+}
+
+test.describe("cases view: a question is typed, not uploaded (#121)", () => {
+  test.beforeEach(async ({ request }) => {
+    await resetMockSessions(request);
+  });
+
+  test("the typed question goes to the case as a text file of its own and the field empties", async ({ page }) => {
+    const fake = await fakeCases(page, [], QA_MODEL);
+    const { sent } = await takeTypedFiles(page, fake);
+    await openCases(page);
+
+    const add = page.getByTestId("case-typed-add");
+    await expect(add).toBeDisabled();
+    await expect(page.getByTestId("case-submit")).toBeDisabled();
+    await page.getByLabel("User Question").fill("Miten laite nollataan tehdasasetuksiin?");
+    await add.click();
+
+    await expect(page.getByTestId("case-inputs")).toContainText("user_question.txt");
+    await expect(page.getByLabel("User Question")).toHaveValue("");
+    // The step has its input: the case can be sent without any file of the user's.
+    await expect(page.getByTestId("case-submit")).toBeEnabled();
+    expect(fake.created).toBe(1);
+    expect(sent.map((s) => s.name)).toEqual(["user_question.txt"]);
+    expect(sent[0].body).toContain("Miten laite nollataan tehdasasetuksiin?");
+  });
+
+  test("in a case, each added question is a file of its own on one line, and a refused one stays in the field", async ({ page }) => {
+    const fake = await fakeCases(page, [fakeCase(1, "draft")], QA_MODEL);
+    const { sent, state } = await takeTypedFiles(page, fake);
+    await openCases(page);
+    const field = page.getByLabel("User Question");
+    const add = page.getByTestId("case-typed-add");
+    await expect(field).toHaveAccessibleDescription(/Jokainen lisätty teksti on yksi kysymys/);
+
+    // Typed over two lines, it is still one question to the run.
+    await field.fill("Laitteessa näkyy virhekoodi E42.\nMiten korjaan sen?");
+    await add.click();
+    await expect(page.getByTestId("case-inputs")).toContainText("user_question.txt");
+    await expect(field).toHaveValue("");
+
+    state.refuse = true;
+    await field.fill("Mitä takuu kattaa?");
+    await add.click();
+    await expect(page.getByTestId("case-upload-problem")).toContainText("user_question_2.txt");
+    await expect(field).toHaveValue("Mitä takuu kattaa?");
+
+    // Added again, it is named after the case as read after the first one.
+    await add.click();
+    await expect(page.getByTestId("case-inputs")).toContainText("user_question_2.txt");
+    await expect(field).toHaveValue("");
+    expect(sent.map((s) => s.name)).toEqual(["user_question.txt", "user_question_2.txt"]);
+    expect(sent[0].body).toContain("Laitteessa näkyy virhekoodi E42. Miten korjaan sen?\n");
+  });
+
+  test("a question typed and not added is added when the case is sent", async ({ page }) => {
+    const fake = await fakeCases(page, [fakeCase(1, "draft")], QA_MODEL);
+    const { sent, state } = await takeTypedFiles(page, fake);
+    await page.route(`**${CASES}/${caseId(1)}/submit`, (route) => {
+      state.order.push("submit");
+      const found = fake.cases.find((c) => c.id === caseId(1));
+      if (found) found.status = "running";
+      return route.fulfill({ json: found });
+    });
+    await openCases(page);
+
+    const submit = page.getByTestId("case-submit");
+    await expect(submit).toBeDisabled();
+    await page.getByLabel("User Question").fill("Miten laite nollataan?");
+    await expect(submit).toBeEnabled();
+    await submit.click();
+
+    await expect.poll(() => state.order).toEqual(["input", "submit"]);
+    expect(sent.map((s) => s.name)).toEqual(["user_question.txt"]);
+  });
+
+  test("a step that takes a recording has no text field, also where a text file is taken", async ({ page }) => {
+    await fakeCases(page, [], {
+      ...MODEL,
+      accepted_inputs: [
+        { kind: "audio", label: "WAV", extensions: [".wav"] },
+        { kind: "txt", label: "TXT", extensions: [".txt"] },
+      ],
+    });
+    await openCases(page);
+
+    await expect(page.getByTestId("case-upload")).toBeVisible();
+    await expect(page.getByTestId("case-typed")).toHaveCount(0);
+  });
+});

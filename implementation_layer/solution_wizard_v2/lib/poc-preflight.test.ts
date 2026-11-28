@@ -35,6 +35,16 @@ describe("packageStatus", () => {
     expect(packageStatus({ ...base, generated: false, preflight: "idle" })).toBe("missing");
     expect(packageStatus({ ...base, complete: false, preflight: "ok" })).toBe("incomplete");
   });
+
+  it("calls a missing or unfinished package preparing while the wizard writes it (#144)", () => {
+    expect(packageStatus({ ...base, generated: false, preflight: "idle", writing: true })).toBe("preparing");
+    expect(packageStatus({ ...base, complete: false, preflight: "idle", writing: true })).toBe("preparing");
+    // Once the reply has ended, what is still missing is what the package lacks.
+    expect(packageStatus({ ...base, complete: false, preflight: "idle", writing: false })).toBe("incomplete");
+    // A complete package is judged by its check, reply or not.
+    expect(packageStatus({ ...base, preflight: "ok", writing: true })).toBe("ready");
+    expect(packageStatus({ ...base, loaded: false, preflight: "idle", writing: true })).toBe("loading");
+  });
 });
 
 describe("shouldStartPreflight", () => {

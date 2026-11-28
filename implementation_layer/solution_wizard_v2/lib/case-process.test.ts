@@ -9,7 +9,9 @@ import {
   isAudioInput,
   isDocument,
   isLastInput,
+  isQuestionInput,
   isTable,
+  isTypedInput,
   parseInput,
   problemCount,
   reusablePocInputsForTask,
@@ -20,6 +22,8 @@ import {
   tableColumns,
   toCsv,
   toMarkdown,
+  typedInputFileName,
+  typedInputText,
 } from "@/lib/case-process";
 
 // A voice report reviewed by a supervisor, in the shape wizard_api reads from the BPMN.
@@ -113,6 +117,64 @@ describe("the process from the BPMN", () => {
     for (const name of ["Invoice Pdf", "InvoicePdf", "Laskun PDF", "Puhelinlasku PDF", "Puheenjohtajan muistio", "Puhelu loki"]) {
       expect(isAudioInput(name), name).toBe(false);
     }
+  });
+});
+
+describe("a typed input (#121)", () => {
+  it("is a question, a query or a message, by the last word of its name", () => {
+    for (const name of [
+      "User Question",
+      "user_question",
+      "userQuery",
+      "Search queries",
+      "Prompt",
+      "Customer message",
+      "Kysymys",
+      "Käyttäjän kysymykset",
+      "Käyttäjäkysymys",
+      "Hakukysely",
+      "Asiakkaan viesti",
+      "Tekstiviesti",
+    ]) {
+      expect(isTypedInput(name), name).toBe(true);
+    }
+  });
+
+  it("is not a document, a guide or a recording, also of a question or a message", () => {
+    for (const name of [
+      "PDF guides",
+      "Invoice Pdf",
+      "Ohjekirja",
+      "Querétaro map",
+      "Questionnaire",
+      "Questionnaire PDF",
+      "Message Archive",
+      "Kyselylomake",
+      "Kyselyn vastaukset",
+      "Viestintäsuunnitelma",
+      "Voice Message Audio",
+      "Ääniviesti",
+      null,
+    ]) {
+      expect(isTypedInput(name), String(name)).toBe(false);
+    }
+  });
+
+  it("keeps a question on one line, and other text as it was typed", () => {
+    expect(typedInputText("User Question", "  Laitteessa näkyy E42.\nMiten korjaan sen?\n")).toBe(
+      "Laitteessa näkyy E42. Miten korjaan sen?",
+    );
+    expect(isQuestionInput("Customer message")).toBe(false);
+    expect(typedInputText("Customer message", " Hei,\n\nlasku puuttuu.\n")).toBe("Hei,\n\nlasku puuttuu.");
+  });
+
+  it("goes to the case as the input's name as a .txt the case does not have yet", () => {
+    expect(typedInputFileName("User Question", [])).toBe("user_question.txt");
+    expect(typedInputFileName("Käyttäjän kysymys", [])).toBe("kayttajan_kysymys.txt");
+    expect(typedInputFileName("User Question", ["guide.pdf", "User_Question.txt"])).toBe("user_question_2.txt");
+    expect(typedInputFileName("User Question", ["user_question.txt", "user_question_2.txt"])).toBe("user_question_3.txt");
+    expect(typedInputFileName("???", [])).toBe("text.txt");
+    expect(typedInputFileName(null, [])).toBe("text.txt");
   });
 });
 

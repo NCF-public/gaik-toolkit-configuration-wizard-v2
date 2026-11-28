@@ -32,7 +32,7 @@ import {
   pageReadSession,
   type BlueprintUpdate,
 } from "@/lib/blueprint-update";
-import { NO_POC_PACKAGE, pocPackageState, samePocPackage } from "@/lib/poc-package-state";
+import { NO_POC_PACKAGE, pocPackageState, pocProblemText, samePocPackage } from "@/lib/poc-package-state";
 import type { FieldSpec } from "@/components/field-schema-editor";
 import type { ExtractionProposal } from "@/lib/extraction-proposal";
 import type { TargetOutputSpec } from "@/lib/target-output-spec";
@@ -1145,11 +1145,17 @@ export function WorkspacePanel({
   useEffect(() => {
     const onReplying = (e: Event) => {
       const replying = Boolean((e as CustomEvent<boolean>).detail);
+      const wasReplying = chatActivity.current.replying;
       chatActivity.current = chatReplyingChanged(chatActivity.current, replying);
       setWizardReplying(replying);
-      if (replying) setPackageStale(true);
+      // Also when a reply ends: the tab reads the package while the wizard
+      // writes it, and a read from before the last write left the package
+      // "unfinished" in red and Gate 3 open until the next read came back.
+      // Not for the chat's first word that nobody replies: Gate 3 waited for
+      // a read of the package from a tab that was not open.
+      if (replying || wasReplying) setPackageStale(true);
       // The read this starts replaces any that was on its way.
-      else setPocRefresh((n) => n + 1);
+      if (!replying) setPocRefresh((n) => n + 1);
     };
     window.addEventListener(CHAT_REPLYING_EVENT, onReplying);
     return () => window.removeEventListener(CHAT_REPLYING_EVENT, onReplying);
@@ -1168,12 +1174,14 @@ export function WorkspacePanel({
   // A package whose files are complete can still fail the check; it is then not
   // "ready to run", and the run is no longer the step the tab points to.
   const checkFailed = checkPhase === "failed";
-  // Step 1's one status line: ready to run only once the check passed.
+  // Step 1's one status line: ready to run only once the check passed. While
+  // the wizard replies, what the package lacks is what it has not written yet.
   const packageState = packageStatus({
     loaded: pocLoaded,
     generated: pocGenerated,
     complete: pocReady,
     preflight: checkPhase,
+    writing: wizardReplying || packageStale,
   });
   const checkedVersionRef = useRef<string | null>(null);
   // A preflight the sandbox had no room for is asked for again after Retry-After;
@@ -2239,6 +2247,8 @@ export function WorkspacePanel({
   // records and a document have no place for them.
   const sourcesDrawn = Boolean(trace) && !table && records.some((r) => !documentSections(r));
   const generating = pocStatus === "running";
+  const problemText = (problem: string) =>
+    pocProblemText(problem, { missing: t.pocProblemMissing, unfinished: t.pocProblemUnfinished });
   // 1 · A complete package with nothing wrong is one status line; its files,
   // the working copy and "Generate again" sit behind "Package details". That
   // holds while the check runs and where none can run, so the step does not
@@ -2247,6 +2257,7 @@ export function WorkspacePanel({
   // and the run.
   const packageCollapsed =
     packageState === "ready" ||
+    packageState === "preparing" ||
     packageState === "checking" ||
     packageState === "unchecked" ||
     packageState === "unfinished";
@@ -2275,6 +2286,12 @@ export function WorkspacePanel({
           ready to run only once the check passed. */}
       {packageState === "loading" ? (
         <span>{t.pocLoading}</span>
+      ) : packageState === "preparing" ? (
+        // The wizard is still writing it: not a fault, and no way on yet (#144).
+        <span className="inline-flex items-center gap-1 text-text-secondary">
+          <Icon name="loaderCircle" size={13} className="animate-spin" />
+          {t.pocPackagePreparing}
+        </span>
       ) : packageState === "missing" ? (
         <span data-testid="poc-run-hint">{t.pocRunHint}</span>
       ) : packageState === "incomplete" ? (
@@ -2477,13 +2494,13 @@ export function WorkspacePanel({
         )
       }
     >
-      {!pocReady && pocProblems.length > 0 && (
+      {packageState === "incomplete" && pocProblems.length > 0 && (
         <ul
           className="list-disc border-t border-border py-2.5 pl-9 pr-4 text-xs text-danger-text"
           data-testid="poc-problems"
         >
           {pocProblems.map((p) => (
-            <li key={p}>{p}</li>
+            <li key={p}>{problemText(p)}</li>
           ))}
         </ul>
       )}
@@ -2498,7 +2515,8 @@ export function WorkspacePanel({
         </div>
       )}
       {pocGenerated && keyFilesStrip}
-      {packageCollapsed ? (
+      {/* Nothing written yet: no package to tell details of. */}
+      {packageState === "preparing" && !pocGenerated ? null : packageCollapsed ? (
         <details
           className="group border-t border-border"
           data-testid="poc-package-details"
@@ -2521,7 +2539,8 @@ export function WorkspacePanel({
                   ref={regenReplaceRef}
                   type="button"
                   className="btn-secondary"
-                  disabled={generating || runActive}
+                  // Also when the confirm was opened before the wizard started writing.
+                  disabled={generating || runActive || packageState === "preparing"}
                   onClick={() => {
                     setRegenConfirm(false);
                     void runPoc();
@@ -2544,7 +2563,8 @@ export function WorkspacePanel({
                 <button
                   type="button"
                   className="btn-ghost"
-                  disabled={generating || runActive}
+                  // A package generated now would replace the one the wizard is writing.
+                  disabled={generating || runActive || packageState === "preparing"}
                   onClick={() => setRegenConfirm(true)}
                 >
                   <Icon
@@ -2554,6 +2574,16 @@ export function WorkspacePanel({
                   />
                   {generating ? t.pocRunning : t.pocRerun}
                 </button>
+              </div>
+            )}
+            {packageState === "preparing" && pocProblems.length > 0 && (
+              <div className="text-xs text-text-muted" data-testid="poc-not-written-yet">
+                <span className="font-medium">{t.pocPackageNotWrittenYet}</span>
+                <ul className="mt-1 list-disc pl-5">
+                  {pocProblems.map((p) => (
+                    <li key={p}>{problemText(p)}</li>
+                  ))}
+                </ul>
               </div>
             )}
             {pocFiles.length > 0 && (
