@@ -121,7 +121,7 @@ import { FileTree } from "@/components/file-tree";
 import { PocFileEditor } from "@/components/poc-file-editor";
 import { PocEnvForm } from "@/components/poc-env-form";
 import { composeEnv, envLayout, hasEnvValues, layoutVariables, type ExtraVariable } from "@/lib/env-file";
-import { ENV_EXAMPLE_NAME, pocFileFrom, pocPathOf, type PocFileSaved } from "@/lib/poc-file";
+import { ENV_EXAMPLE_NAME, pocFileFrom, pocPathOf, solutionFileTab, type PocFileSaved } from "@/lib/poc-file";
 import { BlueprintModeBar } from "@/components/blueprint-mode-bar";
 import { Icon, type IconName } from "@/components/icons";
 
@@ -1186,6 +1186,11 @@ export function WorkspacePanel({
 
   // The package file open in the editor, by its path inside poc/; null for none.
   const [editorPath, setEditorPath] = useState<string | null>(null);
+  // A file beside poc/ open in the viewer (read only), by its name in the package.
+  const [solutionPath, setSolutionPath] = useState<string | null>(null);
+  // The blueprint or a diagram pressed in the package's tree: they are shown on
+  // their own tab, which this note points to.
+  const [tabNote, setTabNote] = useState<{ path: string; tab: "json" | "flow" } | null>(null);
   // The .env for the deployable package. The variables are read from the
   // package's .env.example; the values are typed here and stay in this
   // state: never stored, never sent, added to the downloaded zip in the
@@ -2399,14 +2404,50 @@ export function WorkspacePanel({
         paths={pocFiles}
         testId="poc-file-tree"
         open={{
-          // The package's own files; what lies beside poc/ is not opened here.
-          canOpen: (path) => pocPathOf(path) !== null,
-          onOpen: (path) => setEditorPath(pocPathOf(path)),
+          // Every file: the package's own in the editor, the documents and the
+          // markers beside poc/ in the viewer, read only. The blueprint and the
+          // diagrams are their tabs' own, where they are shown as they are now.
+          canOpen: () => true,
+          onOpen: (path) => {
+            const inPackage = pocPathOf(path);
+            const ownTab = solutionFileTab(path);
+            setTabNote(null);
+            if (inPackage !== null) setEditorPath(inPackage);
+            else if (ownTab) setTabNote({ path, tab: ownTab });
+            else setSolutionPath(path);
+          },
           label: t.pocFileOpen,
-          isReadOnly: isAlwaysReadOnlyPackagePath,
+          isReadOnly: (path) =>
+            pocPathOf(path) === null ? solutionFileTab(path) === null : isAlwaysReadOnlyPackagePath(path),
           readOnlyLabel: t.pocFileReadOnlyMark,
         }}
       />
+      {tabNote && (
+        <p
+          role="status"
+          className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-surface-muted/60 px-2.5 py-1.5 text-xs text-text-secondary"
+          data-testid="poc-file-in-tab"
+        >
+          <span>
+            {t.pocFileInTab
+              .replace("{name}", tabNote.path)
+              .replace("{tab}", tabLabels[tabNote.tab])}
+          </span>
+          {tabs.includes(tabNote.tab) && (
+            <button
+              type="button"
+              className="font-medium text-brand-text underline-offset-2 hover:underline"
+              onClick={() => {
+                setTab(tabNote.tab);
+                setTabNote(null);
+              }}
+              data-testid="poc-file-in-tab-go"
+            >
+              {t.pocFileGoToTab.replace("{tab}", tabLabels[tabNote.tab])}
+            </button>
+          )}
+        </p>
+      )}
       {pocWorkOnly.length > 0 && (
         <p className="mt-1.5 text-xs text-text-muted" data-testid="poc-work-only">
           {t.pocWorkOnly.replace("{names}", pocWorkOnly.join(", "))}
@@ -3908,6 +3949,19 @@ export function WorkspacePanel({
                       t={t}
                       onClose={() => setEditorPath(null)}
                       onSaved={onFileSaved}
+                    />
+                  )}
+                  {solutionPath !== null && (
+                    <PocFileEditor
+                      key={`solution:${solutionPath}`}
+                      sessionId={sessionId}
+                      path={solutionPath}
+                      source="solution"
+                      gate3Approved={wizardStep > GATE_3_STEP}
+                      t={t}
+                      onClose={() => setSolutionPath(null)}
+                      // Read only: nothing is saved from the viewer.
+                      onSaved={() => {}}
                     />
                   )}
                 </div>

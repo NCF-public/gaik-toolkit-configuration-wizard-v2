@@ -3269,6 +3269,73 @@ def _package_bpmn(db: Session, session: Any) -> tuple[str | None, dict[str, Any]
         return ai_marking.mark_xml(fh.read()), {"made_from": source}
 
 
+def _solution_made_from(
+    diagram: str | None, diagram_source: dict[str, Any], solution: list[tuple[str, str]]
+) -> dict[str, dict[str, Any]]:
+    """What each file beside ``poc/`` was made from, for the package's AI marker."""
+    # The blueprint file, the Mermaid diagram and the documents are the agent's;
+    # a save in the workspace since its draft was adopted is in the BPMN only.
+    made_from: dict[str, dict[str, Any]] = {}
+    if diagram is not None:
+        from wizard_api.services import poc_service
+
+        made_from[poc_service.SOLUTION_BPMN_NAME] = diagram_source
+    made_from.update({name: {"made_from": "agent_draft"} for name, _ in solution})
+    return made_from
+
+
+def _solution_marker_json(db: Session, session: Any, made_from: dict[str, dict[str, Any]]) -> str:
+    """The AI marker at the root of the deployable package (``AI-GENERATED.json``)."""
+    from wizard_api.services import ai_marking
+
+    return ai_marking.marker_json(
+        session,
+        "solution-files-deployable",
+        agent_draft_matches_blueprint=not artifact_sync.user_changed_blueprint(db, session),
+        files=made_from,
+    )
+
+
+@router.get("/{session_id}/solution/file")
+def read_solution_file(
+    session_id: uuid.UUID,
+    path: str = _POC_FILE_PATH,
+    db: Session = Depends(get_db),
+) -> Response:
+    """One file the deployable package carries beside ``poc/``, as text, read only.
+
+    For the PoC tab's file list, which shows the package as it is handed over:
+    the documents, the AI Act screening, the blueprint and the diagrams, and the
+    AI marker at the root. ``path`` is the file's name in the package
+    (``docs/user_guide.md``). Only the names the package carries are served
+    (``poc_service.read_solution_file``); the BPMN diagram and the marker are
+    given as the download draws them. Nothing here is saved: a change to these
+    files goes through the wizard.
+    """
+    from wizard_api.services import ai_marking, poc_service
+
+    session = session_service.get_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    try:
+        if path in (poc_service.SOLUTION_BPMN_NAME, ai_marking.MARKER_FILE):
+            diagram, diagram_source = _package_bpmn(db, session)
+            if path == poc_service.SOLUTION_BPMN_NAME:
+                if diagram is None:
+                    raise poc_service.PackageFileError(404, "not_found", "file not found")
+                data = diagram.encode()
+            else:
+                solution = poc_service.solution_files(session.output_dir)
+                made_from = _solution_made_from(diagram, diagram_source, solution)
+                data = _solution_marker_json(db, session, made_from).encode()
+            answer = poc_service.solution_file_answer(path, data)
+        else:
+            answer = poc_service.read_solution_file(session.output_dir, path)
+    except poc_service.PackageFileError as exc:
+        raise _package_file_error(exc) from exc
+    return JSONResponse(answer, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/{session_id}/poc/deployable")
 def download_deployable_poc(
     session_id: uuid.UUID,
@@ -3357,12 +3424,7 @@ def download_deployable_poc(
     package_config = poc_service.config_with_model_timeout(poc)
     diagram, diagram_source = _package_bpmn(db, session)
     solution = poc_service.solution_files(session.output_dir)
-    # The blueprint file, the Mermaid diagram and the documents are the agent's;
-    # a save in the workspace since its draft was adopted is in the BPMN only.
-    made_from: dict[str, dict[str, Any]] = {}
-    if diagram is not None:
-        made_from[poc_service.SOLUTION_BPMN_NAME] = diagram_source
-    made_from.update({name: {"made_from": "agent_draft"} for name, _ in solution})
+    made_from = _solution_made_from(diagram, diagram_source, solution)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for relative in _deployable_entries(poc):
@@ -3389,15 +3451,7 @@ def download_deployable_poc(
                     zf.writestr(rel_path, content)
                     made_from[rel_path] = {"made_from": "nextjs_starter"}
                 frontend_added = True
-        zf.writestr(
-            ai_marking.MARKER_FILE,
-            ai_marking.marker_json(
-                session,
-                "solution-files-deployable",
-                agent_draft_matches_blueprint=not artifact_sync.user_changed_blueprint(db, session),
-                files=made_from,
-            ),
-        )
+        zf.writestr(ai_marking.MARKER_FILE, _solution_marker_json(db, session, made_from))
     return Response(
         content=buf.getvalue(),
         media_type="application/zip",

@@ -510,6 +510,19 @@ export async function apiGetPocFile(id: string, path: string): Promise<Response>
 }
 
 /**
+ * One file the deployable package carries beside poc/ (`docs/user_guide.md`,
+ * `AI-GENERATED.json`), read only, for the PoC tab's viewer. `path` is the
+ * file's name in the package. Raw Response, as for a package file.
+ */
+export async function apiGetSolutionFile(id: string, path: string): Promise<Response> {
+  const base = getWizardApiUrl() ?? DEFAULT_API_URL;
+  return fetch(`${base}/sessions/${encodeURIComponent(id)}/solution/file?path=${encodeURIComponent(path)}`, {
+    headers: await outgoingHeaders(),
+    cache: "no-store",
+  });
+}
+
+/**
  * Save the editor's text over one file of the package. `baseDigest` is the
  * digest the file was read with: the api answers 409 when the file changed
  * since (the agent rewrote it).

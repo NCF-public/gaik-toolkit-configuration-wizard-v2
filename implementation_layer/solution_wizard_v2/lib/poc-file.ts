@@ -89,10 +89,24 @@ export function pocFileSavedFrom(raw: unknown): PocFileSaved | null {
 /**
  * A name in the deployment package's tree (`poc/run_poc.py`) as the path the
  * editor asks for (`run_poc.py`); null for what lies beside `poc/` (the
- * blueprint, the diagrams, the documentation), which the editor does not open.
+ * blueprint, the diagrams, the documentation), which the editor opens
+ * read-only from `GET /solution/file` instead.
  */
 export function pocPathOf(packagePath: string): string | null {
   return packagePath.startsWith("poc/") && packagePath.length > 4 ? packagePath.slice(4) : null;
+}
+
+/**
+ * The workspace tab that shows a file of the package beside `poc/`: the
+ * blueprint on the Blueprint tab, the two diagrams on the Workflow tab. Null for
+ * the other files (the documents, the screening, the AI marker), which open in
+ * the viewer. The tab shows the blueprint as it is now and lets it be changed;
+ * the file is only a copy of it.
+ */
+export function solutionFileTab(packagePath: string): "json" | "flow" | null {
+  if (packagePath === "use_case.blueprint.json") return "json";
+  if (packagePath === "workflow.bpmn" || packagePath === "workflow.mmd") return "flow";
+  return null;
 }
 
 /** `.env`, every `.env*` name but `.env.example`, and every `*.env`: a file that would hold keys. */

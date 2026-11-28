@@ -2132,6 +2132,41 @@ def solution_file_names(output_dir: str | None, *, can_draw: bool) -> list[str]:
     return names
 
 
+def solution_file_answer(name: str, data: bytes) -> dict[str, Any]:
+    """A file beside ``poc/`` as the PoC tab's viewer is given it: text, never editable.
+
+    The same shape as :func:`read_package_file`. These files are the wizard's
+    own (the documents, the screening, the AI marker); a change to one goes
+    through the wizard, so the viewer only shows them.
+    """
+    if len(data) > MAX_PACKAGE_FILE_BYTES:
+        raise PackageFileError(413, "file_too_large", "the file is too large to open here")
+    return {
+        "path": name,
+        "digest": content_digest(data),
+        "bytes": len(data),
+        "editable": False,
+        "read_only_reason": "file_read_only",
+        "affects_package": False,
+        "content": _text(data),
+    }
+
+
+def read_solution_file(output_dir: str | None, name: str) -> dict[str, Any]:
+    """One file the deployable package carries beside ``poc/``, by its name there.
+
+    Only a name :func:`solution_files` lists for the session (the blueprint, the
+    Mermaid diagram, the documents and the AI Act screening): any other path,
+    a ``..`` or a file the package leaves out is ``not_found``, so nothing else
+    in the session folder can be read this way. The BPMN diagram and the AI
+    marker are drawn when the package is taken; the route gives those itself.
+    """
+    source = dict(solution_files(output_dir)).get(name)
+    if source is None:
+        raise PackageFileError(404, "not_found", "file not found")
+    return solution_file_answer(name, _read_capped(source))
+
+
 def stored_bpmn(output_dir: str | None) -> tuple[str, str] | None:
     """The diagram already drawn in the session, for when it cannot be drawn again.
 

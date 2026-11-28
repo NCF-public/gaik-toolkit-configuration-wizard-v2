@@ -354,19 +354,75 @@ test.describe("PoC file editor", () => {
     await expect(editor.locator(".cm-content")).toHaveAttribute("contenteditable", "false");
   });
 
-  test("the AI marker is shown read-only, and what lies beside poc/ is not opened", async ({ page }) => {
+  test("the package's AI marker is shown read-only", async ({ page }) => {
     await fakePackage(page);
     await openPoc(page);
-    const tree = await openTree(page);
-    // The blueprint and the root marker are listed, not buttons.
-    await expect(tree.locator('li[data-path="use_case.blueprint.json"] button')).toHaveCount(0);
-    await expect(tree.locator('li[data-path="AI-GENERATED.json"] button')).toHaveCount(0);
 
     const editor = await openFile(page, "AI-GENERATED.json");
     await expect(editor.getByTestId("poc-file-note")).toHaveText("Vain luku: tätä tiedostoa ei muokata käsin.");
     await expect(editor.locator(".cm-content")).toContainText('"ai_generated": true');
     await expect(editor.locator(".cm-content")).toHaveAttribute("contenteditable", "false");
     await expect(editor.getByTestId("poc-file-save")).toHaveCount(0);
+  });
+
+  test("a document beside poc/ opens read-only, and the blueprint points to its own tab", async ({ page }) => {
+    await fakePackage(page);
+    // The listing with a document beside poc/, as wizard_api gives it after the documentation phase.
+    await page.route(`${API}/poc/files`, (route) =>
+      route.fulfill({
+        json: {
+          generated: true,
+          ready: true,
+          problems: [],
+          files: FILES,
+          package_files: [...PACKAGE_FILES, "docs/user_guide.md"],
+          version: "v1",
+        },
+      }),
+    );
+    const asked: string[] = [];
+    await page.route(
+      (url) => url.pathname === `/api/sessions/${SESSION}/solution/file`,
+      (route) => {
+        const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+        asked.push(path);
+        return route.fulfill({
+          json: {
+            path,
+            content: "# User guide\n\nUpload one invoice per file.\n",
+            digest: "d1",
+            bytes: 44,
+            editable: false,
+            read_only_reason: "file_read_only",
+            affects_package: false,
+          },
+        });
+      },
+    );
+    await openPoc(page);
+    const tree = await openTree(page);
+
+    await tree.locator('li[data-path="docs/user_guide.md"] button').click();
+    const viewer = page.getByTestId("poc-file-editor");
+    await expect(viewer).toBeVisible();
+    // Named by its place in the package, not under poc/.
+    await expect(viewer.locator("#poc-file-title")).toHaveText("docs/user_guide.md");
+    await expect(viewer.getByTestId("poc-file-note")).toHaveText("Vain luku: tätä tiedostoa ei muokata käsin.");
+    await expect(viewer.getByRole("heading", { name: "User guide" })).toBeVisible();
+    await expect(viewer.getByTestId("poc-file-save")).toHaveCount(0);
+    // Only the document was asked for (twice in development, where React runs the load twice).
+    expect(new Set(asked)).toEqual(new Set(["docs/user_guide.md"]));
+    await page.keyboard.press("Escape");
+    await expect(viewer).toHaveCount(0);
+
+    // The blueprint is not opened as a file: the note sends the user to its tab.
+    await tree.locator('li[data-path="use_case.blueprint.json"] button').click();
+    await expect(page.getByTestId("poc-file-editor")).toHaveCount(0);
+    const note = page.getByTestId("poc-file-in-tab");
+    await expect(note).toContainText("use_case.blueprint.json näytetään Blueprint-välilehdellä");
+    await note.getByTestId("poc-file-in-tab-go").click();
+    await expect(page.getByRole("tab", { name: "Blueprint" })).toHaveAttribute("aria-selected", "true");
+    expect(new Set(asked)).toEqual(new Set(["docs/user_guide.md"]));
   });
 
   test("an environment file with keys is neither read nor saved, and a path out of the package is refused", async ({
