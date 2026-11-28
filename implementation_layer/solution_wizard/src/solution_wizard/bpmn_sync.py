@@ -180,6 +180,7 @@ def _ordered_task_ids(root: ET.Element, step_ids: frozenset[str] = frozenset()) 
             "callActivity",
             "exclusiveGateway",
             "parallelGateway",
+            "inclusiveGateway",
         }:
             if el.get("id"):
                 nodes[el.get("id") or ""] = el
@@ -262,11 +263,11 @@ def _artifact_step_map(v2_blueprint: dict[str, Any]) -> dict[str, str]:
 
 
 def _sync_gateways(root: ET.Element) -> list[dict[str, Any]]:
-    """Snapshot exclusive/parallel gateways from the canvas (#48)."""
+    """Snapshot the canvas gateways, including mixed inclusive joins."""
     out: list[dict[str, Any]] = []
     for el in root.iter():
         local = _local(el.tag)
-        if local not in ("exclusiveGateway", "parallelGateway"):
+        if local not in ("exclusiveGateway", "parallelGateway", "inclusiveGateway"):
             continue
         gid = el.get("id") or ""
         if not gid:
@@ -275,7 +276,7 @@ def _sync_gateways(root: ET.Element) -> list[dict[str, Any]]:
             {
                 "id": _safe_id(gid, "gateway"),
                 "name": _safe_name(el.get("name") or ""),
-                "type": "exclusive" if local == "exclusiveGateway" else "parallel",
+                "type": local.removesuffix("Gateway"),
             }
         )
     return out

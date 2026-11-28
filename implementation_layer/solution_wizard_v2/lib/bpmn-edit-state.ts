@@ -21,7 +21,7 @@ export const BPMN_TASK_TYPES = new Set([
   "bpmn:CallActivity",
 ]);
 
-const GATEWAY_TYPES = new Set(["bpmn:ExclusiveGateway", "bpmn:ParallelGateway"]);
+const GATEWAY_TYPES = new Set(["bpmn:ExclusiveGateway", "bpmn:ParallelGateway", "bpmn:InclusiveGateway"]);
 const FLOW_NODE_TYPES = new Set([
   ...BPMN_TASK_TYPES,
   ...GATEWAY_TYPES,

@@ -426,6 +426,9 @@ class _BpmnBuilder:
         self._dataobj_ref_for_artifact: Dict[str, str] = {}
         # exception ids consumed by _enrich_approval (discard path); skipped by _enrich_exceptions
         self._consumed_exception_ids: set = set()
+        # Decision branches to an ancestor in the base workflow. These stay in
+        # the diagram and coverage checks, but do not classify forward joins.
+        self._decision_rework_flows: set[str] = set()
         # Data store -> candidate senders, in workflow order. Layout chooses
         # the earliest rank, retaining workflow order for parallel senders.
         self._store_anchor_of: dict[str, tuple[str, ...]] = {}
@@ -864,7 +867,7 @@ class _BpmnBuilder:
 
     # -- one way into the success end, for the boxes every success passes --
 
-    def _reaching(self, into: List[_Flow]) -> Dict[str, set]:
+    def _reaching(self, into: List[_Flow], forward: List[_Flow]) -> Dict[str, set]:
         """For each flow, the ids of the flows in ``into`` it leads to, itself
         included, up to the first of them on each path; loops are left out.
 
@@ -873,9 +876,8 @@ class _BpmnBuilder:
         """
         ids = {f.id for f in into}
         by_tgt: Dict[str, List[_Flow]] = {}
-        for f in self.flows:
-            if not f.is_loop:
-                by_tgt.setdefault(f.tgt, []).append(f)
+        for f in forward:
+            by_tgt.setdefault(f.tgt, []).append(f)
         reaching: Dict[str, set] = {}
         for last in into:
             seen, todo = {last.id}, [last]
@@ -898,15 +900,20 @@ class _BpmnBuilder:
         before them, or one that sends a case back to an earlier step). When an
         exclusive split counts, one of the flows runs (an exclusive gateway);
         when only parallel ones (or none), all do (a parallel join). Both at
-        once (a decision's ending beside steps that all run) would be an
-        inclusive gateway, which the diagram's readers do not know yet: it is
-        drawn exclusive.
+        once (a decision's ending beside steps that all run) needs an inclusive
+        join, which waits for the branches that are active in that run.
         """
-        reaching = self._reaching(into)
+        forward = [
+            flow
+            for flow in self.flows
+            if not flow.is_loop and flow.id not in self._decision_rework_flows
+        ]
+        forward_ids = {flow.id for flow in forward}
+        into = [flow for flow in into if flow.id in forward_ids]
+        reaching = self._reaching(into, forward)
         ways_of: Dict[str, List[_Flow]] = {}
-        for f in self.flows:
-            if not f.is_loop:
-                ways_of.setdefault(f.src, []).append(f)
+        for f in forward:
+            ways_of.setdefault(f.src, []).append(f)
         kinds = set()
         for node in self.nodes.values():
             if node.tag not in ("bpmn:exclusiveGateway", "bpmn:parallelGateway"):
@@ -917,6 +924,8 @@ class _BpmnBuilder:
             if len(reached) >= 2:
                 kinds.add(node.tag)
         if "bpmn:exclusiveGateway" in kinds:
+            if "bpmn:parallelGateway" in kinds:
+                return "bpmn:inclusiveGateway"
             return "bpmn:exclusiveGateway"
         return "bpmn:parallelGateway"
 
@@ -940,8 +949,9 @@ class _BpmnBuilder:
         Before, each box was spliced onto one of the flows into the end, so with
         an auto-approval beside a review (two ways to finish) the report and the
         submission landed on different paths. Several flows into the end now meet
-        first, at the gateway `_meeting_kind` picks: exclusive when only one of
-        them runs (a decision), parallel when they all do.
+        first, at the gateway `_meeting_kind` picks: exclusive when one runs,
+        parallel when all run, or inclusive for a mix of alternatives and
+        parallel work.
         """
         into_end = [f for f in self.flows if f.tgt == "EndEvent_success" and not f.is_loop]
         if not into_end:
@@ -1158,10 +1168,23 @@ class _BpmnBuilder:
     # -- enrichment: business decision points -----------------------------
 
     def _enrich_decision_points(self) -> None:
+        # Take ancestry before adding any decision branches. A rework edge in
+        # one decision must not make a forward edge in another look like rework.
+        predecessors: Dict[str, List[str]] = {}
+        for flow in self.flows:
+            if not flow.is_loop:
+                predecessors.setdefault(flow.tgt, []).append(flow.src)
         for i, dp in enumerate(self.bp.business_process.decision_points):
             after_node = self._lookup_node_for_step(dp.after)
             if not after_node:
                 continue
+            ancestors, todo = set(), [after_node]
+            while todo:
+                node = todo.pop()
+                if node in ancestors:
+                    continue
+                ancestors.add(node)
+                todo.extend(predecessors.get(node, ()))
             if dp.after in self._approval_of:
                 # After a review: the decision comes after the approval, on its
                 # "Yes"; the "No" and any rework path stay with the approval.
@@ -1204,7 +1227,9 @@ class _BpmnBuilder:
                     outgoing.remove(moved)
                     moved.name = br.condition or moved.name
                 else:
-                    self._add_flow(xg, tgt, name=br.condition)
+                    moved = self._add_flow(xg, tgt, name=br.condition)
+                if tgt in ancestors:
+                    self._decision_rework_flows.add(moved.id)
 
     # -- the agent's own report and send steps: on every way to the end? --
 
@@ -1292,7 +1317,7 @@ class _BpmnBuilder:
         if not node:
             return set()
         join = f"Gateway_join_{_safe(step_id)}"
-        return {node, join} if join in self.nodes else {node}
+        return {node, join} if self.mapping.get(join, {}).get("kind") == "parallel_join" else {node}
 
     def _dissolve_fork(
         self, step_node: str, gateway: str, outgoing: List[_Flow], targets: set
@@ -1817,6 +1842,7 @@ class _BpmnBuilder:
                 "bpmn:endEvent",
                 "bpmn:exclusiveGateway",
                 "bpmn:parallelGateway",
+                "bpmn:inclusiveGateway",
             )
             extra = ' isMarkerVisible="true"' if node.tag == "bpmn:exclusiveGateway" else ""
             L.append(f'      <bpmndi:BPMNShape id="{node.id}_di" bpmnElement="{node.id}"{extra}>')
