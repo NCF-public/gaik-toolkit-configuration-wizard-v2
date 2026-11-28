@@ -1027,6 +1027,79 @@ def test_the_deployable_package_carries_the_blueprint_the_diagrams_and_the_docum
     assert not any(name.startswith(("docs/", "workflow")) for name in listed["files"])
 
 
+def test_only_the_files_the_package_carries_beside_poc_are_read(tmp_path) -> None:
+    """The PoC tab's list shows docs/ and the files at the root, but the reader
+    must not open anything else in the session folder."""
+    _write_solution(str(tmp_path))
+
+    read = poc_service.read_solution_file(str(tmp_path), "docs/user_guide.md")
+
+    assert read["content"] == "# User guide\n"
+    assert read["editable"] is False and read["read_only_reason"] == "file_read_only"
+    assert read["affects_package"] is False
+    assert read["digest"] == poc_service.content_digest(b"# User guide\n")
+    for name in (
+        "docs/.env",
+        "docs/notes.md",
+        "docs/invoice-1001.pdf",
+        "ui_view/blueprint.json",
+        "docs/../use_case.blueprint.json",
+        "../use_case.blueprint.json",
+        "workflow.bpmn",  # drawn by the route, never read from disk
+        "poc/run_poc.py",
+    ):
+        with pytest.raises(poc_service.PackageFileError) as refused:
+            poc_service.read_solution_file(str(tmp_path), name)
+        assert refused.value.status == 404, name
+
+
+def test_a_solution_file_too_large_for_the_viewer_is_refused() -> None:
+    too_large = b"x" * (poc_service.MAX_PACKAGE_FILE_BYTES + 1)
+    with pytest.raises(poc_service.PackageFileError) as refused:
+        poc_service.solution_file_answer("docs/user_guide.md", too_large)
+    assert refused.value.status == 413
+
+
+@requires_postgres
+def test_the_files_beside_poc_open_read_only_as_the_package_carries_them(
+    client, db_session, monkeypatch
+) -> None:
+    from wizard_api.ownership import USER_HEADER
+
+    _draw_without_solution_wizard(monkeypatch)
+    created = _session_with_a_design(client, "solution-file-viewer")
+    sid = created["id"]
+    output_dir = _session_output_dir(db_session, sid)
+    _write_poc(output_dir)
+    _write_solution(output_dir)
+
+    def read(path: str, **kwargs):
+        return client.get(f"/sessions/{sid}/solution/file", params={"path": path}, **kwargs)
+
+    guide = read("docs/user_guide.md")
+    assert guide.status_code == 200
+    assert guide.json()["content"] == "# User guide\n"
+    assert guide.json()["editable"] is False
+    assert guide.headers["cache-control"] == "no-store"
+    # The diagram as the download draws it, not a file left in the session.
+    diagram = read("workflow.bpmn").json()["content"]
+    assert "drawn='yes'" in diagram and "agent='yes'" not in diagram
+    # The marker at the root as the download writes it.
+    marker = json.loads(read("AI-GENERATED.json").json()["content"])
+    assert marker["content"] == "solution-files-deployable"
+    assert set(marker["files"]) == {
+        "use_case.blueprint.json",
+        "workflow.bpmn",
+        "workflow.mmd",
+        "docs/technical_specification.md",
+        "docs/user_guide.md",
+    }
+    # Nothing the package leaves out, and nothing of another user's session.
+    assert read("docs/.env").status_code == 404
+    assert read("ui_view/blueprint.json").status_code == 404
+    assert read("docs/user_guide.md", headers={USER_HEADER: "bob@example.com"}).status_code == 404
+
+
 @requires_postgres
 @requires_scaffolder
 def test_the_package_diagram_follows_a_blueprint_saved_after_the_last_chat_turn(

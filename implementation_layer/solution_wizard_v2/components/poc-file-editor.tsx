@@ -51,14 +51,21 @@ async function problemOf(res: Response): Promise<Problem> {
 export function PocFileEditor({
   sessionId,
   path,
+  source = "package",
   gate3Approved,
   t,
   onClose,
   onSaved,
 }: {
   sessionId: string;
-  /** The file's path inside poc/. */
+  /** The file's path inside poc/, or its name in the package beside poc/ (`source`). */
   path: string;
+  /**
+   * Where the file is: in poc/ (`package`, read and saved through `/poc/file`),
+   * or beside it in the deployable package (`solution`: the documents, the
+   * screening, the AI marker), only read through `/solution/file`.
+   */
+  source?: "package" | "solution";
   /** Gate 3 is approved: a save that changes the tested package reopens it. */
   gate3Approved: boolean;
   t: Dict;
@@ -86,7 +93,9 @@ export function PocFileEditor({
     () => (isMarkdown && viewMode === "preview" ? renderMarkdown(draft) : ""),
     [draft, isMarkdown, viewMode],
   );
-  const url = `/api/sessions/${sessionId}/poc/file?path=${encodeURIComponent(path)}`;
+  const url = `/api/sessions/${sessionId}/${source === "solution" ? "solution" : "poc"}/file?path=${encodeURIComponent(path)}`;
+  // The folder the title names the file in: the package's own files are in poc/.
+  const folder = source === "solution" ? "" : "poc/";
 
   const dirty = file !== null && file.editable && draft !== file.content;
   const dirtyRef = useRef(dirty);
@@ -284,9 +293,9 @@ export function PocFileEditor({
           <h2
             id="poc-file-title"
             className="min-w-0 flex-1 truncate font-mono text-sm font-medium text-text-strong"
-            title={`poc/${path}`}
+            title={`${folder}${path}`}
           >
-            <span className="text-text-muted">poc/</span>
+            {folder && <span className="text-text-muted">{folder}</span>}
             {path}
           </h2>
           {isMarkdown && file && !loadText && (

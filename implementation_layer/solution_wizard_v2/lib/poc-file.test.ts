@@ -7,6 +7,7 @@ import {
   pocFileReadOnly,
   pocFileSavedFrom,
   pocPathOf,
+  solutionFileTab,
   utf8Bytes,
 } from "./poc-file";
 
@@ -17,6 +18,27 @@ describe("pocPathOf", () => {
     expect(pocPathOf("use_case.blueprint.json")).toBeNull();
     expect(pocPathOf("docs/user_guide.md")).toBeNull();
     expect(pocPathOf("poc/")).toBeNull();
+  });
+});
+
+describe("solutionFileTab", () => {
+  it("sends the blueprint to the Blueprint tab and the diagrams to the Workflow tab", () => {
+    expect(solutionFileTab("use_case.blueprint.json")).toBe("json");
+    expect(solutionFileTab("workflow.bpmn")).toBe("flow");
+    expect(solutionFileTab("workflow.mmd")).toBe("flow");
+  });
+
+  it("leaves the documents, the screening and the markers to the viewer", () => {
+    for (const name of [
+      "docs/user_guide.md",
+      "docs/ai_act_screening.md",
+      "ai_act_screening.json",
+      "AI-GENERATED.json",
+      "poc/AI-GENERATED.json",
+      "poc/workflow.bpmn",
+    ]) {
+      expect(solutionFileTab(name)).toBeNull();
+    }
   });
 });
 
