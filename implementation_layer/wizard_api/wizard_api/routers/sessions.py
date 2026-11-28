@@ -2341,10 +2341,17 @@ def _process_references_note(session) -> str | None:
         return None
     if not problems:
         return None
-    told = "; ".join(
-        f"{path} {run_context.quoted(name, 120)}: {run_context.quoted(problem, 200)}"
-        for path, name, problem in problems[:MAX_PROCESS_REFERENCE_PROBLEMS]
-    )
+    told_parts = []
+    for path, name, problem in problems[:MAX_PROCESS_REFERENCE_PROBLEMS]:
+        if path.endswith(".parameters.integration_target") and len(problem) > 200:
+            problem = (
+                "names no integration target. Read technical_spec.integration_targets "
+                f"in {artifact_sync.DRAFT_BLUEPRINT_FILE} and copy an exact name."
+            )
+        told_parts.append(
+            f"{path} {run_context.quoted(name, 120)}: {run_context.quoted(problem, 200)}"
+        )
+    told = "; ".join(told_parts)
     if len(problems) > MAX_PROCESS_REFERENCE_PROBLEMS:
         told = f"{told}; and {len(problems) - MAX_PROCESS_REFERENCE_PROBLEMS} more"
     draft_file = artifact_sync.DRAFT_BLUEPRINT_FILE
