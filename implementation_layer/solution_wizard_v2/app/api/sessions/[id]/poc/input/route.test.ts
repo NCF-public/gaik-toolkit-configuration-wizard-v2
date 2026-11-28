@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/session-access", () => ({
   requireOwnedSession: vi.fn(async () => ({ user: { email: "dev@gaik.local" } })),
+}));
+vi.mock("@/lib/current-user", () => ({
+  getCurrentUser: vi.fn(async () => ({ email: "dev@gaik.local" })),
 }));
 vi.mock("@/lib/wizard-api-client", () => ({
   wizardApiEnabled: vi.fn(() => true),
@@ -17,6 +20,7 @@ vi.mock("@/lib/i18n", async (importOriginal) => {
 
 import { GET, POST } from "@/app/api/sessions/[id]/poc/input/route";
 import { apiListPocInputs, apiUploadPocInput } from "@/lib/wizard-api-client";
+import { requireOwnedSession } from "@/lib/session-access";
 
 const TRACE = "trace-input-001";
 
@@ -93,5 +97,64 @@ describe("PoC input upload relay", () => {
     expect(res.status).toBe(500);
     expect(text).not.toContain("/srv/wizard");
     expect(JSON.parse(text).detail).toMatchObject({ error: "internal_error", trace_id: TRACE });
+  });
+});
+
+describe("PoC input upload during a maintenance break", () => {
+  beforeEach(() => {
+    vi.mocked(apiUploadPocInput).mockReset();
+    vi.mocked(apiListPocInputs).mockReset();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.mocked(requireOwnedSession).mockResolvedValue({ user: { email: "dev@gaik.local" } } as Awaited<
+      ReturnType<typeof requireOwnedSession>
+    >);
+  });
+
+  it("refuses the upload before it reaches wizard_api, which the proxy cannot do here", async () => {
+    vi.stubEnv("WIZARD_MAINTENANCE", "on");
+    const res = await upload();
+    expect(res.status).toBe(503);
+    expect(res.headers.get("x-wizard-maintenance")).toBe("on");
+    expect(res.headers.get("retry-after")).toBeTruthy();
+    expect(apiUploadPocInput).not.toHaveBeenCalled();
+  });
+
+  it("answers with the maintenance signal while wizard_api is down, before the session lookup", async () => {
+    vi.stubEnv("WIZARD_MAINTENANCE", "on");
+    // The lookup asks wizard_api; down for the break, it finds nothing.
+    vi.mocked(requireOwnedSession).mockClear().mockResolvedValue(null);
+    for (const res of [
+      await upload(),
+      await GET(new NextRequest("http://localhost/api/sessions/s1/poc/input"), {
+        params: Promise.resolve({ id: "s1" }),
+      }),
+    ]) {
+      expect(res.status).toBe(503);
+      expect(res.headers.get("x-wizard-maintenance")).toBe("on");
+      expect(res.headers.get("retry-after")).toBeTruthy();
+    }
+    expect(requireOwnedSession).not.toHaveBeenCalled();
+  });
+
+  it("still checks the owner of an address on the maintenance list", async () => {
+    vi.stubEnv("WIZARD_MAINTENANCE", "on");
+    vi.stubEnv("WIZARD_MAINTENANCE_ALLOW", "dev@gaik.local");
+    vi.mocked(requireOwnedSession).mockResolvedValue(null);
+    const res = await GET(new NextRequest("http://localhost/api/sessions/s1/poc/input"), {
+      params: Promise.resolve({ id: "s1" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("lets an address on the maintenance list through", async () => {
+    vi.stubEnv("WIZARD_MAINTENANCE", "on");
+    vi.stubEnv("WIZARD_MAINTENANCE_ALLOW", "ops@gaik.local, Dev@gaik.local");
+    vi.mocked(apiListPocInputs).mockResolvedValue({ files: [], expected_inputs: [], accepted_inputs: [] });
+    const res = await GET(new NextRequest("http://localhost/api/sessions/s1/poc/input"), {
+      params: Promise.resolve({ id: "s1" }),
+    });
+    expect(res.status).toBe(200);
   });
 });

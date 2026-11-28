@@ -5,6 +5,7 @@
 
 import { NextRequest } from "next/server";
 import { requireOwnedSession } from "@/lib/session-access";
+import { maintenanceRefusal } from "@/lib/maintenance-route";
 import { withLogging } from "@/lib/with-logging";
 import { audit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
@@ -22,8 +23,12 @@ export const dynamic = "force-dynamic";
 
 export const GET = withLogging(
   "poc.input.list",
-  async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+  async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params;
+    // Maintenance mode, which the proxy cannot apply here: before the session
+    // lookup, which asks wizard_api (lib/maintenance-route).
+    const closed = await maintenanceRefusal(req.nextUrl.pathname);
+    if (closed) return closed;
     const owned = await requireOwnedSession(id);
     if (!owned) {
       return new Response("Session not found", { status: 404 });
@@ -49,6 +54,10 @@ export const POST = withLogging(
     // cross-site check it does for every other write happens here.
     if (isCrossSiteWrite(req)) return new Response("Cross-site request refused", { status: 403 });
     const { id } = await params;
+    // Maintenance mode, which the proxy cannot apply here: before the session
+    // lookup, which asks wizard_api (lib/maintenance-route).
+    const closed = await maintenanceRefusal(req.nextUrl.pathname);
+    if (closed) return closed;
     const owned = await requireOwnedSession(id);
     if (!owned) {
       return new Response("Session not found", { status: 404 });

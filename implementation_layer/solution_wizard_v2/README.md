@@ -106,6 +106,17 @@ Laskurit ovat muistissa: web-sovellus ajetaan yhtenä replikana. Ne nollautuvat
 uudelleenkäynnistyksessä eivätkä ole yhteisiä prosessien kesken; useampi
 replika tarvitsisi jaetun tallennuksen (esim. Redis tai Postgres).
 
+## Huoltokatko
+
+`WIZARD_MAINTENANCE=on` sulkee palvelun huollon ajaksi: jokainen sivu näyttää
+huoltosivun (suomi ensin, englanti alla) ja jokainen API-kutsu saa `503`:n ja
+`Retry-After`-otsakkeen. `planned` ei estä mitään vaan näyttää bannerin tulevasta
+katkosta. Kirjautumissivut ja `/privacy` pysyvät auki, ja
+`WIZARD_MAINTENANCE_ALLOW`-listan osoitteet pääsevät sisään tarkistamaan
+palvelun. Ehto tarkistetaan `proxy.ts`:ssä ja niissä upload-reiteissä, joita
+proxy ei näe (`lib/maintenance.ts`). Muuttujat ja Rahtin ohje:
+`../deploy/openshift/README.md`, "Maintenance break".
+
 ## Rakenne
 
 ```

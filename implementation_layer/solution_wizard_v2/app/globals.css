@@ -90,6 +90,12 @@
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
+/* Room for the planned-maintenance banner, which sets the variable while it
+   shows (components/maintenance-notice.tsx). */
+body {
+  padding-top: var(--maintenance-offset, 0px);
+}
+
 html,
 body {
   background: var(--color-app);

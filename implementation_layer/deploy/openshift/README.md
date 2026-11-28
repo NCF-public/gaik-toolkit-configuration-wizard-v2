@@ -273,6 +273,49 @@ Back to Keycloak: `oc set env "deployment/$WEB_DEPLOYMENT" WIZARD_AUTH_MODE-` an
 `./deploy.sh signin`. The sessions are kept either way; they belong to the
 e-mail address.
 
+## Maintenance break
+
+The web app can close the service for a break and show a maintenance page
+(`solution_wizard_v2/lib/maintenance.ts`). It is switched with `oc set env` on
+the **web** deployment only. Never `oc apply` the manifests for it: the live
+deployment carries settings they lack. Each `oc set env` rolls out a new web
+pod, about half a minute.
+
+| Var | Value |
+|-----|-------|
+| `WIZARD_MAINTENANCE` | `planned`: nothing is refused, every page shows a banner about the coming break. `on`: every page answers with the maintenance page (Finnish first, English below) and every API call with `503`, `Retry-After` and `x-wizard-maintenance: on`; an open page reloads into the maintenance page on its next call. Unset or anything else: off |
+| `WIZARD_MAINTENANCE_START` | optional, ISO 8601 (`2026-12-04T16:00:00Z`): when a planned break begins, for the banner |
+| `WIZARD_MAINTENANCE_UNTIL` | optional, ISO 8601: when the break is expected to end, for the page, the banner and `Retry-After` (5 minutes without it) |
+| `WIZARD_MAINTENANCE_MESSAGE` | optional: one line of your own on the page and the banner, plain text, at most 500 characters |
+| `WIZARD_MAINTENANCE_ALLOW` | optional: signed-in addresses that still get in while the mode is `on`, comma-separated, to check the service before it opens |
+
+The sign-in pages and `/privacy` stay open while the mode is on, so an address on
+the list can sign in. The web pod's probes are TCP checks and do not see the
+mode. Behind the Keycloak sign-in (`signin-proxy.yaml`) a visitor who is signed
+out meets the Keycloak sign-in before the maintenance page.
+
+A running agent turn goes on in the api pod and is saved; the mode refuses only
+new requests, and the browser's stream ends when the web pod is replaced.
+So, for a break that restarts the api or the database:
+
+```bash
+WEB_DEPLOYMENT=wizard-v2-web   # wizard-v2-<instance>-web for a second stack
+# 1. Some hours before: the banner.
+oc set env "deployment/$WEB_DEPLOYMENT" -n "$PROJECT" WIZARD_MAINTENANCE=planned \
+  WIZARD_MAINTENANCE_START=2026-12-04T16:00:00Z WIZARD_MAINTENANCE_UNTIL=2026-12-04T18:00:00Z
+# 2. At the start: close, with yourself on the list.
+oc set env "deployment/$WEB_DEPLOYMENT" -n "$PROJECT" WIZARD_MAINTENANCE=on \
+  WIZARD_MAINTENANCE_ALLOW='<your sign-in address>'
+# 3. Give the turns already running a few minutes to end (the api log), then
+#    do the work, and check the service signed in as the address on the list.
+# 4. Open again.
+oc set env "deployment/$WEB_DEPLOYMENT" -n "$PROJECT" WIZARD_MAINTENANCE- \
+  WIZARD_MAINTENANCE_START- WIZARD_MAINTENANCE_UNTIL- WIZARD_MAINTENANCE_MESSAGE- WIZARD_MAINTENANCE_ALLOW-
+```
+
+What the mode cannot cover: while the web pod itself is down or being
+replaced, nothing answers, and the Rahti router shows its own error page.
+
 ## Environment variables
 
 **wizard-v2-api** (runtime):
@@ -313,6 +356,8 @@ one whose row in the demo's `access_requests` is approved
 gets in, since anyone can create an account in the project with its public key.
 The older build-time pair `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 is still read when the run-time one is unset.
+The maintenance mode is `WIZARD_MAINTENANCE` and its four companions (runtime,
+`oc set env`, see "Maintenance break").
 `GAIK_DEMO_URL` (runtime, optional) is where the sign-in page and the account
 menu link back to the GAIK demos; it defaults to `https://gaik-demo.2.rahtiapp.fi`,
 and an empty value hides the link.
