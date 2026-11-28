@@ -32,6 +32,8 @@ from wizard_api.storage import ensure_output_dir
 
 logger = logging.getLogger(__name__)
 
+MAX_PROCESS_REFERENCE_PROBLEM_CHARS = 200
+
 # Metadata keys the server writes as a record of what happened: the chat
 # transcript, the refinement history, the run the deployable package is gated
 # on (#143), the agent conversation the next chat turn resumes, the agent draft
@@ -401,15 +403,29 @@ def _integration_marker_problems(data: dict, steps: list[dict]) -> list[tuple[st
         marker = integration_marker(step)
         if marker is None or marker in targets:
             continue
+        problem = (
+            f'names no integration target: "{marker}"; use one of the exact names '
+            f"in technical_spec.integration_targets: {exact}"
+            if targets
+            else f'names no integration target: "{marker}"; '
+            "technical_spec.integration_targets is empty"
+        )
+        if len(problem) > MAX_PROCESS_REFERENCE_PROBLEM_CHARS:
+            prefix = 'names no integration target: "'
+            suffix = (
+                '". Read technical_spec.integration_targets '
+                f"in {artifact_sync.DRAFT_BLUEPRINT_FILE} and copy an exact name."
+                if targets
+                else '"; technical_spec.integration_targets is empty'
+            )
+            room = MAX_PROCESS_REFERENCE_PROBLEM_CHARS - len(prefix) - len(suffix)
+            preview = marker if len(marker) <= room else marker[: room - 1] + "…"
+            problem = prefix + preview + suffix
         problems.append(
             (
                 f"workflow.steps[{i}].parameters.integration_target",
                 _text(step.get("name")) or _text(step.get("id")),
-                f'names no integration target: "{marker}"; use one of the exact names '
-                f"in technical_spec.integration_targets: {exact}"
-                if targets
-                else f'names no integration target: "{marker}"; '
-                "technical_spec.integration_targets is empty",
+                problem,
             )
         )
     return problems

@@ -984,6 +984,33 @@ class _BpmnBuilder:
         artifacts = {k: a.model_dump(mode="json") for k, a in self.bp.artifacts.items()}
         return final_report_step_ids(self._step_dicts(), artifacts)
 
+    def _reviewed_report_nodes(self, reports: set[str]) -> set[str]:
+        """An earlier report replaces the fallback only if each later review
+        explicitly takes its final report artifacts as inputs."""
+        accepted = set()
+        for step in self.bp.workflow.steps:
+            node = self._lookup_node_for_step(step.id)
+            if node not in reports:
+                continue
+            final_outputs = {
+                artifact_id
+                for artifact_id in step.outputs
+                if (artifact := self.bp.artifacts.get(artifact_id)) is not None
+                and artifact.type.lower() in ("pdf", "report")
+                and artifact.source == "generated"
+                and artifact.final_output
+                and artifact.produced_by == step.id
+            }
+            downstream = self._reachable(node)
+            if all(
+                final_outputs <= set(review.inputs)
+                for review in self.bp.workflow.steps
+                if review.type == "human_review"
+                and self._lookup_node_for_step(review.id) in downstream
+            ):
+                accepted.add(node)
+        return accepted
+
     def _own_submission_steps(self, target: Optional[str] = None) -> List[str]:
         """The workflow steps that send to an integration target themselves: their
         ``parameters.integration_target`` is the target's exact name (any target
@@ -1082,9 +1109,9 @@ class _BpmnBuilder:
         spliced *after* the PDF -- the natural "generate the report, then submit
         it" order.
 
-        An explicit final report may precede human review: the reviewer can
-        approve the report already produced. Revision after corrections is
-        an explicit workflow step.
+        An explicit final report may precede human review when that review
+        takes its final report artifacts as inputs. Revision after corrections
+        is an explicit workflow step.
 
         Nothing is added when every way to the success end passes a step that
         writes the final report itself (`_own_report_steps`: a generated
@@ -1098,7 +1125,8 @@ class _BpmnBuilder:
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
         if not wants_report(spec.get("output_types")):
             return
-        if named_report_step(self._step_dicts()):
+        own_reports = self._step_nodes(self._own_report_steps())
+        if named_report_step(self._step_dicts()) and own_reports <= reports:
             return
         if self._passes_every_way(reports):
             return
@@ -1612,7 +1640,7 @@ class _BpmnBuilder:
         # PDF generation is placed on the approved path *before* integration so
         # the order reads "generate the report -> submit it", and so a human
         # review approves the output before the PDF is rendered.
-        reports = self._step_nodes(self._own_report_steps())
+        reports = self._reviewed_report_nodes(self._step_nodes(self._own_report_steps()))
         self._enrich_pdf_generation(reports)
         self._enrich_integration(reports)
         self._map_done_choices(reports)
