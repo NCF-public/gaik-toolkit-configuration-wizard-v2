@@ -265,6 +265,11 @@ export type Dict = {
   bpmnDecisionEndNoteReportDelivery: string;
   bpmnDecisionEndNoteReport: string;
   bpmnDecisionEndNoteDelivery: string;
+  bpmnDecisionEndNoteSuccess: string;
+  bpmnDecisionEndReportComplete: string;
+  bpmnDecisionEndReportConditional: string;
+  bpmnDecisionEndDeliveryComplete: string;
+  bpmnDecisionEndDeliveryConditional: string;
   bpmnDecisionAddBranch: string;
   bpmnDecisionRemoveBranch: string;
   /** Every branch leads to one place: the decision decides nothing. */
@@ -1324,6 +1329,11 @@ const fi: Dict = {
     "Valmis kulkee raportin ja viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
   bpmnDecisionEndNoteReport: "Valmis kulkee raportin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
   bpmnDecisionEndNoteDelivery: "Valmis kulkee viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+  bpmnDecisionEndNoteSuccess: "Valmis päättää käsittelyn onnistuneesti. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+  bpmnDecisionEndReportComplete: "Raportti on jo valmis tässä kohdassa.",
+  bpmnDecisionEndReportConditional: "Jos haara ohittaa raporttivaiheen, raportti voidaan lisätä loppuun.",
+  bpmnDecisionEndDeliveryComplete: "Työnkulun omat vientivaiheet on jo tehty tässä kohdassa.",
+  bpmnDecisionEndDeliveryConditional: "Jos haara ohittaa vientivaiheen, vienti voidaan lisätä loppuun.",
   bpmnDecisionAddBranch: "Lisää haara",
   bpmnDecisionRemoveBranch: "Poista haara {n}",
   bpmnDecisionSameTarget: "Kaikki haarat johtavat samaan paikkaan: valitse ainakin yhdelle toinen vaihe.",
@@ -2417,6 +2427,11 @@ const en: Dict = {
   bpmnDecisionEndNoteReport: "Done goes through the report. If handling ends without a result, add a rejection path.",
   bpmnDecisionEndNoteDelivery:
     "Done goes through the delivery. If handling ends without a result, add a rejection path.",
+  bpmnDecisionEndNoteSuccess: "Done completes the process successfully. To end without a result, add a rejection path.",
+  bpmnDecisionEndReportComplete: "The report is already complete at this point.",
+  bpmnDecisionEndReportConditional: "If this branch skips the report step, a report can be added at the end.",
+  bpmnDecisionEndDeliveryComplete: "The workflow’s own delivery steps have already run at this point.",
+  bpmnDecisionEndDeliveryConditional: "If this branch skips a delivery step, a delivery can be added at the end.",
   bpmnDecisionAddBranch: "Add a branch",
   bpmnDecisionRemoveBranch: "Remove branch {n}",
   bpmnDecisionSameTarget: "Every branch leads to the same place: pick another step for at least one.",

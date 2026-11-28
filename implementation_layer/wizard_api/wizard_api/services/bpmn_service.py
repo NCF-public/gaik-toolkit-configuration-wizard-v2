@@ -420,6 +420,16 @@ def with_agent_process(
                 refs = [a for a in draft.get(key) or [] if a in draft_artifacts]
                 step[key] = refs
                 used.update(refs)
+        # The integration target the agent's own step sends to: the diagram then
+        # draws no "Submit to …" task beside it (the adapter rebuilds parameters).
+        params = draft.get("parameters")
+        target = params.get("integration_target") if isinstance(params, dict) else None
+        if isinstance(target, str) and target:
+            own = step.get("parameters")
+            step["parameters"] = {
+                **(own if isinstance(own, dict) else {}),
+                "integration_target": target,
+            }
     out["workflow"] = {**(v1.get("workflow") or {}), "steps": steps}
     if used:
         # Every artifact becomes a data object, so the ones the adapter made up

@@ -393,7 +393,16 @@ IMPORTANT INSTRUCTIONS FOR THIS WEB SESSION:
   "target": a step id or "end"}}, and a path in exceptions only with
   "attached_to" naming a step: fill them in. A
   branch to "end" means done, through the report and delivery; a case that ends
-  without a result is a rejection path with outcome "end".
+  without a result is a rejection path with outcome "end". The diagram adds a
+  "Generate PDF report" task and a "Submit to ..." task per integration target
+  by itself: when you write your own step for that work, mark it so it is drawn
+  once. The step that writes the report outputs an artifact of type "pdf" with
+  source "generated", final_output true and produced_by that step; the step that sends to an
+  integration target has parameters.integration_target set to the target's
+  exact name in technical_spec.integration_targets. Your steps replace the
+  generated tasks only when every way to the end passes them: a decision
+  branch that is done should then target your report step (or your first
+  send step), not "end", or the generated tasks stay beside yours.
 - THE USER EDITS THE SOLUTION TOO. The user can change the solution in the
   workspace; the server writes those changes into use_case.blueprint.json and
   tells you which. Read the file again before you edit it, and never undo a

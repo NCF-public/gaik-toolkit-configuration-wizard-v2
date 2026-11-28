@@ -39,7 +39,7 @@ async function openEditable(
   page: Page,
   gateway: (id: string) => Record<string, unknown>,
   onOperation: (route: Route) => Promise<void>,
-  /** More of the mapping: the boxes the generator draws before the end. */
+  /** More of the mapping: generated tasks or finishing work covered by existing steps. */
   extra: Mapping = {},
 ) {
   const sent: unknown[][] = [];
@@ -48,7 +48,8 @@ async function openEditable(
   expect(gateways.length).toBeGreaterThan(0);
   const mapping: Mapping = { StartEvent_1: { kind: "start_event", blueprint_path: "derived:start" }, ...extra };
   STEPS.forEach((id, i) => {
-    mapping[`Activity_${id}`] = { kind: "user_task", blueprint_path: `workflow.steps[${i}]`, performed_by: "" };
+    const elementId = `Activity_${id}`;
+    mapping[elementId] = { kind: "user_task", blueprint_path: `workflow.steps[${i}]`, performed_by: "", ...extra[elementId] };
   });
   mapping[gateways[0]] = gateway(gateways[0]);
   await page.route("**/api/sessions/ses_laskut/bpmn/mapping*", (route) =>
@@ -288,6 +289,34 @@ test.describe("BPMN decisions", () => {
     await dialog.getByTestId("bpmn-branch-target").nth(1).selectOption("classify");
     await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveCount(0);
     await dialog.getByRole("button", { name: "Peruuta" }).click();
+  });
+
+  test("Done explains whether the workflow's own report and delivery already ran", async ({ page }) => {
+    await openEditable(
+      page,
+      () => ({ kind: "approval_gateway", blueprint_path: "derived:approval_after:approve" }),
+      refused,
+      {
+        Activity_extract: { done_report: "conditional", done_delivery: "conditional" },
+        Activity_export: { done_report: "complete", done_delivery: "complete" },
+      },
+    );
+    const dialog = page.getByTestId("bpmn-branch-dialog");
+    const addDecision = page.locator('.djs-context-pad .entry[data-action="gaik-add-decision"]');
+    const note = dialog.getByTestId("bpmn-branch-end-note");
+
+    await pickStep(page, 1);
+    await addDecision.click();
+    await dialog.getByTestId("bpmn-branch-target").first().selectOption("end");
+    await expect(note).toContainText("Jos haara ohittaa raporttivaiheen, raportti voidaan lisätä loppuun.");
+    await expect(note).toContainText("Jos haara ohittaa vientivaiheen, vienti voidaan lisätä loppuun.");
+    await dialog.getByRole("button", { name: "Peruuta" }).click();
+
+    await pickStep(page, 4);
+    await addDecision.click();
+    await dialog.getByTestId("bpmn-branch-target").first().selectOption("end");
+    await expect(note).toContainText("Raportti on jo valmis tässä kohdassa.");
+    await expect(note).toContainText("Työnkulun omat vientivaiheet on jo tehty tässä kohdassa.");
   });
 
   test("the dialog in English", async ({ page }) => {

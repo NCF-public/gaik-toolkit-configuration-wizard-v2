@@ -198,6 +198,50 @@ def test_two_decision_points_after_one_step_are_reported_on_the_second():
     ]
 
 
+ERP_TARGET = "ERP system (approved invoice data)"
+
+
+def _with_report_and_send(
+    *, report_art=None, send_params=None, targets=(ERP_TARGET,), outputs=("pdf",)
+):
+    """The live run's shape: a step writes the report, erp_submission sends to the
+    ERP."""
+    artifacts = {"invoice_pdf": {"type": "pdf", "source": "user_upload"}}
+    if report_art is not None:
+        artifacts["invoice_report"] = report_art
+    steps = [
+        {"id": "upload", "name": "Upload", "outputs": ["invoice_pdf"]},
+        {
+            "id": "invoice_report",
+            "name": "Create the PDF report",
+            "outputs": ["invoice_report"],
+        },
+        {"id": "erp_submission", "name": "Submit to the ERP", "parameters": send_params or {}},
+    ]
+    return {
+        "technical_spec": {"output_types": list(outputs), "integration_targets": list(targets)},
+        "artifacts": artifacts,
+        "workflow": {"steps": steps},
+        "business_process": {},
+    }
+
+
+GENERATED_PDF = {
+    "type": "pdf",
+    "source": "generated",
+    "produced_by": "invoice_report",
+    "final_output": True,
+}
+
+
+def test_steps_marked_as_the_report_and_the_submission_are_not_reported():
+    draft = _with_report_and_send(
+        report_art=GENERATED_PDF, send_params={"integration_target": ERP_TARGET}
+    )
+
+    assert session_service.process_reference_problems(draft) == []
+
+
 def test_a_branch_without_a_target_is_reported():
     decision = dict(
         AUTO_APPROVAL, branches=[{"target": "erp"}, {"condition": "else", "target": ""}]
@@ -302,3 +346,86 @@ def test_the_problem_reaches_the_agent_until_the_draft_is_fixed(client, monkeypa
     _write(created["output_dir"], _draft([AUTO_APPROVAL]))
     client.post(f"/sessions/{sid}/chat", json={"message": "Entä nyt?"})
     assert "The diagram cannot draw" not in seen[-1]
+
+
+def _steps(draft):
+    return draft["workflow"]["steps"]
+
+
+def test_a_marker_that_names_no_target_is_reported_with_the_exact_names():
+    draft = _with_report_and_send(
+        report_art=GENERATED_PDF, send_params={"integration_target": "erp_system"}
+    )
+
+    assert session_service.process_reference_problems(draft) == [
+        (
+            "workflow.steps[2].parameters.integration_target",
+            "Submit to the ERP",
+            f'names no integration target: "erp_system"; use one of the exact names in '
+            f'technical_spec.integration_targets: "{ERP_TARGET}"',
+        )
+    ]
+
+
+def test_a_marker_without_any_targets_says_the_list_is_empty():
+    draft = _with_report_and_send(
+        report_art=GENERATED_PDF, send_params={"integration_target": "erp"}, targets=()
+    )
+
+    (problem,) = session_service.process_reference_problems(draft)
+
+    assert (
+        problem[2]
+        == 'names no integration target: "erp"; technical_spec.integration_targets is empty'
+    )
+
+
+def test_a_name_that_only_looks_like_a_step_for_the_work_gets_no_hint():
+    """Steps are not taken for the report or a submission by their names: an
+    unmarked "Create the PDF report" and "Submit to the ERP" are left alone."""
+    assert session_service.process_reference_problems(_with_report_and_send()) == []
+
+
+# The guards: a malformed field is skipped, and the check still runs past it.
+# Each draft also has a marker naming no target, which must still be reported.
+
+UNKNOWN = {"integration_target": "erp_system"}
+
+
+def _marker_paths(draft):
+    return [p for p, _, _ in session_service.process_reference_problems(draft)]
+
+
+def test_parameters_that_are_not_an_object_do_not_drop_the_note():
+    draft = _with_report_and_send(report_art=GENERATED_PDF, send_params=UNKNOWN)
+    _steps(draft)[1]["parameters"] = ["x"]
+    _steps(draft)[0]["parameters"] = {"integration_target": {"not": "a name"}}
+
+    assert _marker_paths(draft) == ["workflow.steps[2].parameters.integration_target"]
+
+
+def test_outputs_that_are_not_a_list_do_not_drop_the_note():
+    draft = _with_report_and_send(report_art=GENERATED_PDF, send_params=UNKNOWN)
+    _steps(draft)[0]["outputs"] = 5
+
+    assert _marker_paths(draft) == ["workflow.steps[2].parameters.integration_target"]
+
+
+def test_depends_on_that_is_not_a_list_keeps_the_note():
+    draft = _with_report_and_send(report_art=GENERATED_PDF, send_params=UNKNOWN)
+    _steps(draft)[1]["depends_on"] = 3
+
+    assert _marker_paths(draft) == ["workflow.steps[2].parameters.integration_target"]
+
+
+def test_integration_targets_that_are_not_a_list_keep_the_decision_problems():
+    draft = _with_report_and_send(report_art=GENERATED_PDF, send_params=UNKNOWN)
+    draft["technical_spec"]["integration_targets"] = 7
+    draft["business_process"] = {
+        "decision_points": [{"id": "d", "name": "Big?", "after": "", "branches": []}]
+    }
+
+    paths = _marker_paths(draft)
+
+    assert any(p.startswith("business_process.decision_points[0]") for p in paths)
+    assert "workflow.steps[2].parameters.integration_target" in paths

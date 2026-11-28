@@ -284,15 +284,18 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
     process = data.get("business_process")
     workflow = data.get("workflow")
     steps = _dicts(workflow.get("steps")) if isinstance(workflow, dict) else []
-    if not isinstance(process, dict) or not steps:
+    if not steps:
         return []
+    if not isinstance(process, dict):
+        process = {}
     step_ids = {_ref(s.get("id")) for s in steps + _dicts(process.get("manual_steps"))}
     step_ids.discard("")
     # Steps of type "decision", and each step's dependents, for a choice written twice.
     decision_steps = {_ref(s.get("id")) for s in steps if _text(s.get("type")) == "decision"}
     dependents: dict[str, set[str]] = {}
     for s in steps:
-        for dep in s.get("depends_on") or []:
+        deps = s.get("depends_on")
+        for dep in deps if isinstance(deps, list) else []:
             if isinstance(dep, str):
                 dependents.setdefault(dep, set()).add(_ref(s.get("id")))
     seen_after: set[str] = set()
@@ -366,6 +369,49 @@ def process_reference_problems(data: dict | None) -> list[tuple[str, str, str]]:
         outcome = _ref(path_item.get("outcome"))
         if outcome.startswith("loop_to:") and outcome.split(":", 1)[1].strip() not in step_ids:
             problems.append((path, name, f'outcome names no step: "{outcome}"'))
+    try:
+        problems.extend(_integration_marker_problems(data, steps))
+    except Exception:  # the marker check never takes the decision and path problems with it
+        logger.warning("integration marker check failed", exc_info=True)
+    return problems
+
+
+def _integration_marker_problems(data: dict, steps: list[dict]) -> list[tuple[str, str, str]]:
+    """Markers that name no integration target.
+
+    A step that sends to an integration target itself says so in
+    ``parameters.integration_target``, with the target's exact name, and the
+    diagram then draws no generated "Submit to …" task beside it
+    (solution_wizard's bpmn_generator, ``integration_marker``). A marker that
+    matches no name in ``technical_spec.integration_targets`` is not read, so
+    the exact names are quoted for the agent to copy. Without solution_wizard
+    there is no diagram, and nothing to check.
+    """
+    try:
+        from solution_wizard.bpmn_generator import integration_marker
+    except ImportError:  # pragma: no cover - optional in minimal installs
+        return []
+    spec = data.get("technical_spec")
+    spec = spec if isinstance(spec, dict) else {}
+    raw_targets = spec.get("integration_targets")
+    targets = [str(t) for t in raw_targets] if isinstance(raw_targets, list) else []
+    exact = ", ".join(f'"{t}"' for t in targets)
+    problems: list[tuple[str, str, str]] = []
+    for i, step in enumerate(steps):
+        marker = integration_marker(step)
+        if marker is None or marker in targets:
+            continue
+        problems.append(
+            (
+                f"workflow.steps[{i}].parameters.integration_target",
+                _text(step.get("name")) or _text(step.get("id")),
+                f'names no integration target: "{marker}"; use one of the exact names '
+                f"in technical_spec.integration_targets: {exact}"
+                if targets
+                else f'names no integration target: "{marker}"; '
+                "technical_spec.integration_targets is empty",
+            )
+        )
     return problems
 
 
