@@ -163,13 +163,14 @@ def _runs(bp):
     ``(nodes in the order passed, nodes a token was left waiting at)`` per run.
     """
     flows, kinds, _ = _flows(bp)
-    # Use the blueprint's dependencies to recognize explicit decision rework
-    # before the generic cycle walk. DFS alone can classify a forward edge as
-    # the back edge when another decision reaches the same step first.
+    # Build the step-level history independently of the generator's XML graph.
+    # A decision can establish that one step precedes another even without a
+    # depends_on edge. Rework never adds to this forward history.
     elements = {
         entry["blueprint_path"]: node for node, entry in bp.visualizations["bpmn_mapping"].items()
     }
     steps = {step.id: step for step in bp.workflow.steps}
+    predecessors = {step.id: set(step.depends_on) for step in bp.workflow.steps}
     nodes = {step.id: elements[f"workflow.steps[{i}]"] for i, step in enumerate(bp.workflow.steps)}
     back = set()
     for i, decision in enumerate(bp.business_process.decision_points):
@@ -179,14 +180,16 @@ def _runs(bp):
             if step in ancestors:
                 continue
             ancestors.add(step)
-            if step in steps:
-                todo.extend(steps[step].depends_on)
+            todo.extend(predecessors.get(step, ()))
         gateway = elements.get(f"business_process.decision_points[{i}]")
         back.update(
             (gateway, nodes[branch.target])
             for branch in decision.branches
             if branch.target in ancestors and branch.target in nodes
         )
+        for branch in decision.branches:
+            if branch.target in steps and branch.target not in ancestors:
+                predecessors[branch.target].add(decision.after)
     back.update(_back_edges([flow for flow in flows if flow not in back]))
     out, indeg = {}, {}
     for a, b in flows:
@@ -632,7 +635,8 @@ def test_review_of_record_without_the_report_keeps_the_generated_report(report_i
     flows, kinds, _ = _flows(bp)
     assert PDF in kinds
     (sender,) = [node for node, kind in kinds.items() if kind == "sendTask"]
-    assert ("Gateway_approve_review", f"Activity_{report_id}") not in flows
+    assert (f"Activity_{report_id}", "Activity_review") in flows
+    assert ("Gateway_approve_review", "Activity_deliver") in flows
     assert ("Activity_deliver", PDF) in flows
     assert (PDF, sender) in flows
     mapping = bp.visualizations["bpmn_mapping"]
@@ -799,6 +803,36 @@ def test_a_rework_branch_beside_the_report_keeps_one_way_through_it():
     _assert_safe(bp)
 
 
+def test_rework_ancestry_includes_another_decisions_forward_branch():
+    steps = [
+        UPLOAD,
+        EXTRACT,
+        _step("route", "decision", deps=["extract"]),
+        _step("a", deps=["route"]),
+        _step("b", deps=["route"]),
+        _step("post", deps=["a", "b"]),
+    ]
+    decisions = [
+        _decision("first", "a", ("continue", "b"), ("done", "post")),
+        _decision("second", "b", ("done", "post"), ("redo", "a")),
+    ]
+    bp = _blueprint(steps, BASE_ARTS, decisions=decisions)
+    builder = _BpmnBuilder(bp)
+    builder.build()
+    redo = next(
+        f for f in builder.flows if f.src == "Gateway_decision_second" and f.tgt == "Activity_a"
+    )
+    assert redo.id in builder._decision_rework_flows
+    onward = next(
+        f for f in builder.flows if f.src == "Gateway_decision_first" and f.tgt == "Activity_b"
+    )
+    assert onward.id not in builder._decision_rework_flows
+    runs = _assert_safe(bp)
+    assert any("Activity_a" in order and "Activity_b" in order for order in runs)
+    for order in runs:
+        assert order.count("Activity_post") == 1
+
+
 def test_two_decisions_and_a_join_stay_safe():
     steps = [
         UPLOAD,
@@ -820,6 +854,83 @@ def test_two_decisions_and_a_join_stay_safe():
     assert len(ids) == len(set(ids))
     _, kinds, _ = _flows(bp)
     assert PDF in kinds
+    _assert_safe(bp)
+
+
+def test_a_rework_loop_does_not_make_an_earlier_review_follow_the_report():
+    data = _blueprint_dict(
+        [
+            UPLOAD,
+            EXTRACT,
+            _step("review", "human_review", deps=["extract"], inputs=["record"]),
+            _report("make_doc", ["review"]),
+            _send("deliver", ["make_doc"]),
+        ],
+        {**BASE_ARTS, **_report_art("make_doc")},
+    )
+    data["business_process"]["exceptions"] = [
+        {"id": "retry", "attached_to": "deliver", "name": "Retry", "outcome": "loop_to:extract"}
+    ]
+    bp = Blueprint.model_validate(data)
+    _, kinds, _ = _flows(bp)
+    assert PDF not in kinds
+    assert "sendTask" not in kinds.values()
+    _assert_each_finished_run_passes_once(bp, {"Activity_make_doc"}, {"Activity_deliver"})
+
+
+def test_a_review_that_writes_the_report_does_not_have_to_read_its_own_output():
+    report = _report("make_doc", ["extract"])
+    report["type"] = "human_review"
+    bp = _blueprint(
+        [UPLOAD, EXTRACT, report, _send("deliver", ["make_doc"])],
+        {**BASE_ARTS, **_report_art("make_doc")},
+    )
+    _, kinds, _ = _flows(bp)
+    assert PDF not in kinds
+    assert "sendTask" not in kinds.values()
+    _assert_each_finished_run_passes_once(bp, {"Activity_make_doc"}, {"Activity_deliver"})
+
+
+def test_a_later_named_renderer_is_not_disqualified_by_an_earlier_unreviewed_report():
+    bp = _blueprint(
+        [
+            UPLOAD,
+            EXTRACT,
+            _report("make_doc", ["extract"]),
+            _step("review", "human_review", deps=["make_doc"], inputs=["record"]),
+            _step("render_pdf", deps=["review"], inputs=["record"], outputs=["rendered"]),
+            _send("deliver", ["render_pdf"]),
+        ],
+        {**BASE_ARTS, **_report_art("make_doc")},
+    )
+    _, kinds, _ = _flows(bp)
+    assert PDF not in kinds
+
+
+def test_report_review_filter_does_not_change_a_workflow_without_report_output():
+    bp = _blueprint(
+        [
+            UPLOAD,
+            EXTRACT,
+            _report("make_doc", ["extract"]),
+            _step("review", "human_review", deps=["make_doc"], inputs=["record"]),
+            _send("deliver", ["review"]),
+        ],
+        {**BASE_ARTS, **_report_art("make_doc")},
+        outputs=("structured_json",),
+    )
+    generate_bpmn(bp)
+    builder = _BpmnBuilder(bp)
+    accepted = []
+    original = builder._enrich_integration
+
+    def capture(reports):
+        accepted.append(reports)
+        original(reports)
+
+    builder._enrich_integration = capture
+    builder.build()
+    assert accepted == [{"Activity_make_doc"}]
 
 
 def test_a_marker_on_a_decision_step_is_not_taken_for_the_submission():
@@ -852,8 +963,9 @@ def test_the_shared_rules_read_final_output_as_the_blueprint_does():
 # -- the reviewed shapes draw as develop does -----------------------------------
 #
 # In each shape a way to the end skips the agent's own steps.
-# Six drawings still match develop byte for byte. Two change only the mixed
-# success merge's gateway type and its marker. The pinned develop drawings
+# Six drawings still match develop byte for byte. Two correct mixed success
+# merges; one also corrects the upstream join whose input can be bypassed.
+# The pinned develop drawings
 # stay intact so that the allowed correction is visible in the test below.
 # tests/fixtures/bpmn_develop/ holds each
 # blueprint (<name>.json) and develop's drawing of it (<name>.bpmn), made at the
@@ -963,6 +1075,12 @@ DEVELOP_SHAPES = {
     "two_decisions_and_a_join": _shape_two_decisions_and_a_join,
 }
 
+
+@pytest.mark.parametrize("name", sorted(DEVELOP_SHAPES))
+def test_every_reviewed_shape_completes_without_duplicate_visits(name):
+    _assert_safe(Blueprint.model_validate(DEVELOP_SHAPES[name]()))
+
+
 FIXTURES = Path(__file__).parent / "fixtures" / "bpmn_develop"
 
 
@@ -987,6 +1105,14 @@ def test_reviewed_shapes_match_develop_except_corrected_mixed_merges(name):
             'bpmnElement="Gateway_merge_success" isMarkerVisible="true"',
             'bpmnElement="Gateway_merge_success"',
         )
+    if name == "two_decisions_and_a_join":
+        expected, corrected = re.subn(
+            r'<bpmn:parallelGateway id="Gateway_join_make_doc">(.*?)</bpmn:parallelGateway>',
+            r'<bpmn:inclusiveGateway id="Gateway_join_make_doc">\1</bpmn:inclusiveGateway>',
+            expected,
+            flags=re.DOTALL,
+        )
+        assert corrected == 1
 
     assert generate_bpmn(Blueprint.model_validate(blueprint)) == expected
 

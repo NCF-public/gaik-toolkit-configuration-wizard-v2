@@ -77,7 +77,8 @@ export function resolveShapeRole(
 ): GaikSemanticRole {
   if (
     bpmnType === "bpmn:ExclusiveGateway" ||
-    bpmnType === "bpmn:ParallelGateway"
+    bpmnType === "bpmn:ParallelGateway" ||
+    bpmnType === "bpmn:InclusiveGateway"
   ) {
     return "human";
   }

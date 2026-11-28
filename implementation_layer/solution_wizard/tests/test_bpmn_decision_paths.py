@@ -487,7 +487,9 @@ def test_a_decision_after_a_step_that_feeds_a_join_keeps_the_join():
         flows, kinds = _flows(_blueprint(steps, decisions=decisions))
 
         assert all(s in kinds and t in kinds for s, t, _ in flows)
-        assert kinds["Gateway_join_post"] == "parallelGateway"
+        # A branch may bypass post and finish while its sibling still reaches
+        # this join. Wait for active inputs, rather than an untaken branch.
+        assert kinds["Gateway_join_post"] == "inclusiveGateway"
         sources = {s for s, t, _ in flows if t == "Gateway_join_post"}
         assert "Gateway_decision_ok_a" in sources
         assert len(sources) == 2
