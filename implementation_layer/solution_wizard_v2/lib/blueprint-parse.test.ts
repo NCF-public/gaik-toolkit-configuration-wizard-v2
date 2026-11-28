@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { parseBlueprintJson } from "@/lib/blueprint-parse";
 
 describe("parseBlueprintJson", () => {
+  it("keeps inclusive joins read back from the BPMN canvas", () => {
+    const gateways = [{ id: "join_post", name: "", type: "inclusive" }];
+    const parsed = parseBlueprintJson(JSON.stringify({
+      name: "Mixed join",
+      steps: [{ id: "post", name: "Post", type: "ai" }],
+      gateways,
+    }));
+    expect(parsed?.gateways).toEqual(gateways);
+  });
+
   it("parses a valid V2 blueprint", () => {
     const parsed = parseBlueprintJson(
       JSON.stringify({

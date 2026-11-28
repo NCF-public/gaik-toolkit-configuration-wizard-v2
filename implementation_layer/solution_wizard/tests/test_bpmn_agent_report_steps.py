@@ -19,12 +19,14 @@ all its ways. So a step entered twice, or a token left waiting, shows.
 """
 
 import json
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
 from solution_wizard.blueprint import Blueprint
 from solution_wizard.bpmn_generator import _BpmnBuilder, _Flow, generate_bpmn
+from solution_wizard.bpmn_sync import sync_v2_blueprint_from_bpmn_xml
 
 NS = {"bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL"}
 END = "EndEvent_success"
@@ -155,12 +157,37 @@ def _runs(bp):
 
     A token at an exclusive gateway with several ways takes each in turn (a way
     back, `_back_edges`, is rework and is not taken); a task or a fork sends a
-    token down every way out; a parallel join fires when a token has come in on
-    each of its forward ways. A node two tokens reach is passed twice. Returns
+    token down every way out; a parallel join waits for all forward inputs.
+    An inclusive join waits until no active token can still reach it. A node
+    two tokens reach is passed twice. Returns
     ``(nodes in the order passed, nodes a token was left waiting at)`` per run.
     """
     flows, kinds, _ = _flows(bp)
-    back = _back_edges(flows)
+    # Use the blueprint's dependencies to recognize explicit decision rework
+    # before the generic cycle walk. DFS alone can classify a forward edge as
+    # the back edge when another decision reaches the same step first.
+    elements = {
+        entry["blueprint_path"]: node for node, entry in bp.visualizations["bpmn_mapping"].items()
+    }
+    steps = {step.id: step for step in bp.workflow.steps}
+    nodes = {step.id: elements[f"workflow.steps[{i}]"] for i, step in enumerate(bp.workflow.steps)}
+    back = set()
+    for i, decision in enumerate(bp.business_process.decision_points):
+        ancestors, todo = set(), [decision.after]
+        while todo:
+            step = todo.pop()
+            if step in ancestors:
+                continue
+            ancestors.add(step)
+            if step in steps:
+                todo.extend(steps[step].depends_on)
+        gateway = elements.get(f"business_process.decision_points[{i}]")
+        back.update(
+            (gateway, nodes[branch.target])
+            for branch in decision.branches
+            if branch.target in ancestors and branch.target in nodes
+        )
+    back.update(_back_edges([flow for flow in flows if flow not in back]))
     out, indeg = {}, {}
     for a, b in flows:
         if (a, b) in back:
@@ -169,8 +196,41 @@ def _runs(bp):
         indeg[b] = indeg.get(b, 0) + 1
     runs = []
 
+    def reaches(start, target):
+        seen, todo = set(), [start]
+        while todo:
+            node = todo.pop()
+            if node == target:
+                return True
+            if node not in seen:
+                seen.add(node)
+                todo.extend(out.get(node, []))
+        return False
+
+    def active_can_reach(target, pending, waiting):
+        active = pending + [node for node, count in waiting.items() if count and node != target]
+        return any(reaches(node, target) for node in active)
+
     def go(pending, order, waiting):
-        while pending:
+        while pending or any(waiting.values()):
+            if not pending:
+                # An upstream token may have ended on another path since an
+                # inclusive join first waited. Release it once no active node
+                # can still deliver another token.
+                ready = next(
+                    (
+                        node
+                        for node, count in waiting.items()
+                        if count
+                        and kinds[node] == "inclusiveGateway"
+                        and not active_can_reach(node, [], waiting)
+                    ),
+                    None,
+                )
+                if ready is None:
+                    break
+                waiting[ready] = 0
+                pending = [ready]
             n = pending.pop(0)
             kind = kinds[n]
             if kind == "exclusiveGateway" and len(out.get(n, [])) > 1:
@@ -180,6 +240,11 @@ def _runs(bp):
             if kind == "parallelGateway" and indeg.get(n, 0) > 1:
                 waiting[n] = waiting.get(n, 0) + 1
                 if waiting[n] < indeg[n]:
+                    continue
+                waiting[n] = 0
+            if kind == "inclusiveGateway" and indeg.get(n, 0) > 1:
+                waiting[n] = waiting.get(n, 0) + 1
+                if active_can_reach(n, pending, waiting):
                     continue
                 waiting[n] = 0
             order = order + [n]
@@ -200,6 +265,7 @@ def _assert_each_finished_run_passes_once(bp, reports, sends):
     assert finished, runs
     for order, waiting in runs:
         assert not waiting, (order, waiting)
+        assert len(order) == len(set(order)), order
     for order in finished:
         n_reports = sum(1 for n in order if n in reports or n.startswith(PDF))
         n_sends = sum(1 for n in order if n in sends or n.startswith("Activity_submit_"))
@@ -308,8 +374,8 @@ def test_an_intermediate_pdf_is_not_taken_for_the_final_report():
 
 
 def _assert_safe(bp):
-    """Whatever the shape: no element id is used twice, some run finishes, and
-    no run leaves a token waiting. Returns the finished runs."""
+    """No duplicate element ids or forward visits, some run finishes, and no
+    run leaves a token waiting. Returns the finished runs."""
     root = ET.fromstring(generate_bpmn(bp))
     ids = [e.get("id") for e in root.iter() if e.get("id")]
     assert len(ids) == len(set(ids)), [i for i in ids if ids.count(i) > 1]
@@ -318,7 +384,65 @@ def _assert_safe(bp):
     assert finished, runs
     for order, waiting in runs:
         assert not waiting, (order, waiting)
+        assert len(order) == len(set(order)), order
     return finished
+
+
+@pytest.mark.parametrize("reverse_steps", [False, True])
+def test_a_decision_rework_branch_preserves_the_parallel_join(reverse_steps):
+    siblings = [_step("a", deps=["extract"]), _step("b", deps=["extract"])]
+    if reverse_steps:
+        siblings.reverse()
+    bp = _blueprint(
+        [UPLOAD, EXTRACT, *siblings, _step("post", deps=["a", "b"])],
+        BASE_ARTS,
+        outputs=("structured_json",),
+        decisions=[_decision("choice", "a", ("ok", "post"), ("redo", "extract"))],
+    )
+    flows, kinds, _ = _flows(bp)
+    assert ("Gateway_decision_choice", "Activity_extract") in flows
+    assert kinds["Gateway_join_post"] == "parallelGateway"
+    for order in _assert_safe(bp):
+        assert order.count("Activity_post") == 1
+
+
+def test_alternatives_beside_parallel_work_use_an_inclusive_join_before_a_step():
+    bp = _blueprint(
+        [
+            UPLOAD,
+            EXTRACT,
+            _step("choose", deps=["extract"]),
+            _step("other", deps=["extract"]),
+            _step("one", deps=["choose"]),
+            _step("two", deps=["choose"]),
+            _step("post", deps=["one", "two", "other"]),
+        ],
+        BASE_ARTS,
+        outputs=("structured_json",),
+        decisions=[_decision("pick", "choose", ("first", "one"), ("second", "two"))],
+    )
+    _, kinds, _ = _flows(bp)
+    assert kinds["Gateway_join_post"] == "inclusiveGateway"
+    runs = _assert_safe(bp)
+    assert len(runs) == 2
+    for order in runs:
+        assert order.count("Activity_post") == 1
+        assert order.count("Activity_one") + order.count("Activity_two") == 1
+    v2 = {
+        "name": "Mixed join",
+        "description": "",
+        "goal": "",
+        "steps": [
+            {"id": step.id, "name": step.name, "type": "ai", "component": "custom"}
+            for step in bp.workflow.steps
+        ],
+    }
+    saved = sync_v2_blueprint_from_bpmn_xml(v2, generate_bpmn(bp))
+    assert {step["id"] for step in saved["steps"]} == {step.id for step in bp.workflow.steps}
+    assert any(
+        gateway["id"] == "Gateway_join_post" and gateway["type"] == "inclusive"
+        for gateway in saved["gateways"]
+    )
 
 
 # -- a way that skips the agent's steps keeps the generated boxes ---------------
@@ -616,6 +740,7 @@ def test_a_sender_on_one_way_of_a_fork_keeps_the_submit_task():
     _, kinds, _ = _flows(bp)
 
     assert "Activity_submit_ERP_system__approved_invoice_data_" in kinds
+    assert kinds["Gateway_merge_success"] == "inclusiveGateway"
     _assert_safe(bp)
 
 
@@ -703,8 +828,11 @@ def test_the_shared_rules_read_final_output_as_the_blueprint_does():
 
 # -- the reviewed shapes draw as develop does -----------------------------------
 #
-# In each of these a way to the end skips the agent's own steps, so the diagram
-# must be exactly what develop drew. tests/fixtures/bpmn_develop/ holds each
+# In each shape a way to the end skips the agent's own steps.
+# Six drawings still match develop byte for byte. Two change only the mixed
+# success merge's gateway type and its marker. The pinned develop drawings
+# stay intact so that the allowed correction is visible in the test below.
+# tests/fixtures/bpmn_develop/ holds each
 # blueprint (<name>.json) and develop's drawing of it (<name>.bpmn), made at the
 # commit in tests/fixtures/bpmn_develop/DEVELOP_COMMIT by
 #     python tests/fixtures/bpmn_develop/regenerate.py
@@ -816,12 +944,26 @@ FIXTURES = Path(__file__).parent / "fixtures" / "bpmn_develop"
 
 
 @pytest.mark.parametrize("name", sorted(DEVELOP_SHAPES))
-def test_a_shape_whose_ways_skip_the_own_steps_draws_as_develop_did(name):
+def test_reviewed_shapes_match_develop_except_corrected_mixed_merges(name):
     blueprint = json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
     # The fixture is the blueprint the shape builds, so a change to the shape
     # is not silently tested against an old drawing.
     assert blueprint == json.loads(json.dumps(DEVELOP_SHAPES[name]()))
     expected = (FIXTURES / f"{name}.bpmn").read_text(encoding="utf-8").replace("\r\n", "\n")
+    if name in {"sender_on_one_way_of_a_fork", "two_decisions_and_a_join"}:
+        # Keep the original develop snapshot. Only the previously incorrect
+        # success merge changes from exclusive to inclusive in these drawings.
+        expected, corrected = re.subn(
+            r'<bpmn:exclusiveGateway id="Gateway_merge_success">(.*?)</bpmn:exclusiveGateway>',
+            r'<bpmn:inclusiveGateway id="Gateway_merge_success">\1</bpmn:inclusiveGateway>',
+            expected,
+            flags=re.DOTALL,
+        )
+        assert corrected == 1
+        expected = expected.replace(
+            'bpmnElement="Gateway_merge_success" isMarkerVisible="true"',
+            'bpmnElement="Gateway_merge_success"',
+        )
 
     assert generate_bpmn(Blueprint.model_validate(blueprint)) == expected
 

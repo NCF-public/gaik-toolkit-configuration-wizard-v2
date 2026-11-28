@@ -89,7 +89,7 @@ export type Blueprint = {
   /** Optional artifact label overrides synced from BPMN data objects. */
   data_objects?: Record<string, string>;
   /** Gateway snapshots synced from BPMN canvas (#48). */
-  gateways?: { id: string; name: string; type: "exclusive" | "parallel" }[];
+  gateways?: { id: string; name: string; type: "exclusive" | "parallel" | "inclusive" }[];
   /** Persistent systems → BPMN data stores (+ submit send task). */
   integration_targets?: string[];
 };

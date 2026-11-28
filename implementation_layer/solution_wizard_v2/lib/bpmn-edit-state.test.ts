@@ -82,6 +82,13 @@ describe("stripTaskCodePrefixes", () => {
 });
 
 describe("bpmnSemantics", () => {
+  it("traverses inclusive joins when finding reachable tasks", async () => {
+    const sem = await semantics(diagram().replaceAll("exclusiveGateway", "inclusiveGateway"));
+    expect(sem.tasks.map((task) => task.id)).toEqual(["Activity_approve", "Activity_extract", "Activity_ingest"]);
+    expect(sem.gateways).toEqual([{ id: "Gateway_approve", name: "Approved?" }]);
+    expect(sem.flows).toContain("Activity_ingest>Activity_extract");
+  });
+
   it("reads tasks, gateways, data objects, start events and the flows between steps", async () => {
     const sem = await semantics(diagram());
     expect(sem.tasks.map((t) => t.id)).toEqual(["Activity_approve", "Activity_extract", "Activity_ingest"]);

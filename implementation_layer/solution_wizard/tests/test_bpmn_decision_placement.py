@@ -48,6 +48,32 @@ def _out_of(flows, source):
     return sorted((t, n) for s, t, n in flows if s == source)
 
 
+def test_a_join_prefixed_decision_step_is_not_an_entry_for_another_step():
+    steps = [
+        dict(_step("extract", inputs=["src"]), outputs=["out"]),
+        _decision_step("join_check", ["extract"]),
+        _step("check", deps=["join_check"]),
+        _step("alternative", deps=["join_check"]),
+    ]
+    point = {
+        "id": "choice",
+        "name": "Finish?",
+        "after": "extract",
+        "branches": [
+            {"condition": "check", "target": "check"},
+            {"condition": "done", "target": "end"},
+        ],
+    }
+    bp = _blueprint(steps, decisions=[point])
+    flows, _ = _flows(bp)
+    assert _out_of(flows, "Gateway_decision_choice") == [
+        ("Activity_check", "check"),
+        ("EndEvent_success", "done"),
+        ("Gateway_join_check", ""),
+    ]
+    assert bp.visualizations["bpmn_mapping"]["Gateway_join_check"]["kind"] == "decision"
+
+
 # -------------------------------------------------- a decision after a review
 
 

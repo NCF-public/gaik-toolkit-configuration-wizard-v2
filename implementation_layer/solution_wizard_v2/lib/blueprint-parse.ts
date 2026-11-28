@@ -51,13 +51,14 @@ export function parseBlueprintJson(text: string): Blueprint | null {
     ...(Array.isArray(obj.gateways)
       ? {
           gateways: obj.gateways.filter(
-            (g): g is { id: string; name: string; type: "exclusive" | "parallel" } =>
+            (g): g is { id: string; name: string; type: "exclusive" | "parallel" | "inclusive" } =>
               !!g &&
               typeof g === "object" &&
               typeof (g as { id?: unknown }).id === "string" &&
               typeof (g as { name?: unknown }).name === "string" &&
               ((g as { type?: unknown }).type === "exclusive" ||
-                (g as { type?: unknown }).type === "parallel"),
+                (g as { type?: unknown }).type === "parallel" ||
+                (g as { type?: unknown }).type === "inclusive"),
           ),
         }
       : {}),
