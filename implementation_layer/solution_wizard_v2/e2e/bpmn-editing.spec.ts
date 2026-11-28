@@ -131,6 +131,22 @@ test.describe("Workflow tab", () => {
     await resetMockSessions(request);
   });
 
+  test("an inclusive gateway keeps its circle and has a plain properties heading", async ({ page }) => {
+    await page.route(/\/api\/sessions\/ses_laskut\/bpmn(?:\?|$)/, async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, body: (await response.text()).replaceAll("exclusiveGateway", "inclusiveGateway") });
+    });
+    await openFlow(page);
+    await waitForDiagram(page);
+    await page.getByTestId("bpmn-zoom-controls").getByRole("button", { name: "Sovita näkymään" }).click();
+    const gateway = page.locator('.bpmn-editable .djs-shape[data-element-id^="Gateway_"]')
+      .filter({ has: page.locator(".djs-visual > circle") }).first();
+    await expect(gateway).toBeVisible();
+    await gateway.click();
+    await expect(page.getByTestId("bpmn-properties").getByRole("heading"))
+      .toHaveText("Aktiivisten haarojen yhdistäminen");
+  });
+
 
   test("opens readable with one group of view controls, and a resize keeps the view the user chose", async ({
     page,

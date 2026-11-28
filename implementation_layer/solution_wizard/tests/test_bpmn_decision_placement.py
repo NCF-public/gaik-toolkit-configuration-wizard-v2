@@ -68,7 +68,7 @@ def test_a_join_prefixed_decision_step_is_not_an_entry_for_another_step():
     flows, _ = _flows(bp)
     assert _out_of(flows, "Gateway_decision_choice") == [
         ("Activity_check", "check"),
-        ("EndEvent_success", "done"),
+        ("EndEvent_decision_choice", "done"),
         ("Gateway_join_check", ""),
     ]
     assert bp.visualizations["bpmn_mapping"]["Gateway_join_check"]["kind"] == "decision"

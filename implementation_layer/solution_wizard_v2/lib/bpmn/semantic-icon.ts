@@ -44,7 +44,7 @@ export function resolveSemanticIcon(
   )
     return "reject";
   if (bpmnType === "bpmn:EndEvent" || key.includes("complete")) return "end";
-  if (bpmnType === "bpmn:ExclusiveGateway" || bpmnType === "bpmn:ParallelGateway")
+  if (bpmnType === "bpmn:ExclusiveGateway" || bpmnType === "bpmn:ParallelGateway" || bpmnType === "bpmn:InclusiveGateway")
     return "gateway";
   if (key.includes("approved") || key.includes("approve?")) return "gateway";
 
@@ -246,7 +246,7 @@ export function captionText(name: string, bpmnType?: string): { short: string; f
   let maxLen = 18;
   if (bpmnType === "bpmn:Participant") maxLen = 36;
   if (bpmnType === "bpmn:Lane") maxLen = 22;
-  if (bpmnType === "bpmn:ExclusiveGateway" || bpmnType === "bpmn:ParallelGateway")
+  if (bpmnType === "bpmn:ExclusiveGateway" || bpmnType === "bpmn:ParallelGateway" || bpmnType === "bpmn:InclusiveGateway")
     maxLen = 12;
   if (bpmnType === "bpmn:StartEvent" || bpmnType === "bpmn:EndEvent") maxLen = 14;
 

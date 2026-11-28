@@ -13,6 +13,9 @@ import {
 } from "./semantic-icon";
 
 describe("resolveSemanticIcon", () => {
+  it("recognises inclusive gateways without relying on their name", () => {
+    expect(resolveSemanticIcon("", "G1", "bpmn:InclusiveGateway")).toBe("gateway");
+  });
   it("reads a bracketed GAIK component code first, ignoring case/spacing", () => {
     expect(resolveSemanticIcon("[Transcriber] Transcribe audio", "t1")).toBe("audio");
     expect(resolveSemanticIcon("[ LLMJudge ] Validate", "v1")).toBe("validation");

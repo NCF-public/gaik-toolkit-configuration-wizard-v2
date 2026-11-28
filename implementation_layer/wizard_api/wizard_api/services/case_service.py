@@ -1578,6 +1578,7 @@ _KINDS = (
     "endEvent",
     "exclusiveGateway",
     "parallelGateway",
+    "inclusiveGateway",
 )
 
 

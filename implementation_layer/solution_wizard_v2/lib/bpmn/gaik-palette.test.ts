@@ -47,6 +47,7 @@ describe("resolveShapeRole", () => {
   it("treats gateways as human", () => {
     expect(resolveShapeRole("bpmn:ExclusiveGateway")).toBe("human");
     expect(resolveShapeRole("bpmn:ParallelGateway")).toBe("human");
+    expect(resolveShapeRole("bpmn:InclusiveGateway")).toBe("human");
   });
 
   it("delegates events to resolveEventRole", () => {

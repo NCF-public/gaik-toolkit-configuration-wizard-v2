@@ -96,9 +96,12 @@ def test_a_decision_is_drawn_after_its_step_with_its_branches() -> None:
     gateway = "Gateway_decision_confident_enough"
     assert ("Activity_upload", gateway, "") in flows
     assert (gateway, "Activity_review", "Sure") in flows
-    assert (gateway, "EndEvent_success", "Unsure") in flows
+    assert (gateway, "EndEvent_decision_confident_enough", "Unsure") in flows
     model = Blueprint.model_validate(result.blueprint)
-    generate_bpmn(model)
+    xml = ET.fromstring(generate_bpmn(model))
+    stop = xml.find('.//bpmn:endEvent[@id="EndEvent_decision_confident_enough"]', _NS)
+    assert stop is not None
+    assert stop.find("bpmn:terminateEventDefinition", _NS) is not None
     assert model.visualizations["bpmn_mapping"][gateway] == {
         "kind": "decision_point",
         "blueprint_path": "business_process.decision_points[0]",
@@ -160,7 +163,7 @@ def test_end_and_a_manual_step_are_targets() -> None:
     # so the archive still waits for both and is entered once.
     assert (gateway, "Gateway_join_archive", "file") in flows
     assert [s for s, t, _ in flows if t == "Activity_archive"] == ["Gateway_join_archive"]
-    assert (gateway, "EndEvent_success", "done") in flows
+    assert (gateway, "EndEvent_decision_confident_enough", "done") in flows
 
 
 def test_decision_ids_use_the_slug_rule() -> None:

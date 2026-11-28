@@ -257,7 +257,7 @@ test.describe("BPMN decisions", () => {
     expect(sent[1]).toEqual([{ op: "remove_decision", decision_id: "big" }]);
   });
 
-  test("a branch to the end says it is done through the report and the delivery, and where a case without a result goes", async ({
+  test("an explicit end says it stops the whole case and does not run future report or delivery steps", async ({
     page,
   }) => {
     test.setTimeout(90_000);
@@ -274,7 +274,7 @@ test.describe("BPMN decisions", () => {
     await page.locator('.djs-context-pad .entry[data-action="gaik-add-decision"]').click();
     const dialog = page.getByTestId("bpmn-branch-dialog");
     const end = dialog.getByTestId("bpmn-branch-target").first().locator('option[value="end"]');
-    await expect(end).toHaveText("Valmis: raportti ja vienti");
+    await expect(end).toHaveText("Päätä käsittely");
     // Said only while a branch leads to the end.
     await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveCount(0);
     // The live region is in the page before the line arrives, and not display: none
@@ -284,14 +284,14 @@ test.describe("BPMN decisions", () => {
     expect(await live.evaluate((el) => getComputedStyle(el).display)).not.toBe("none");
     await dialog.getByTestId("bpmn-branch-target").nth(1).selectOption("end");
     await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveText(
-      "Valmis kulkee raportin ja viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+      "Päättää koko käsittelyn heti, myös rinnakkaiset haarat. Myöhempiä raportti- tai vientivaiheita ei suoriteta.",
     );
     await dialog.getByTestId("bpmn-branch-target").nth(1).selectOption("classify");
     await expect(dialog.getByTestId("bpmn-branch-end-note")).toHaveCount(0);
     await dialog.getByRole("button", { name: "Peruuta" }).click();
   });
 
-  test("Done explains whether the workflow's own report and delivery already ran", async ({ page }) => {
+  test("End case describes the stop and any report and delivery already completed", async ({ page }) => {
     await openEditable(
       page,
       () => ({ kind: "approval_gateway", blueprint_path: "derived:approval_after:approve" }),
@@ -308,8 +308,8 @@ test.describe("BPMN decisions", () => {
     await pickStep(page, 1);
     await addDecision.click();
     await dialog.getByTestId("bpmn-branch-target").first().selectOption("end");
-    await expect(note).toContainText("Jos haara ohittaa raporttivaiheen, raportti voidaan lisätä loppuun.");
-    await expect(note).toContainText("Jos haara ohittaa vientivaiheen, vienti voidaan lisätä loppuun.");
+    await expect(note).toContainText("Päättää koko käsittelyn heti, myös rinnakkaiset haarat.");
+    await expect(note).toContainText("Myöhempiä raportti- tai vientivaiheita ei suoriteta.");
     await dialog.getByRole("button", { name: "Peruuta" }).click();
 
     await pickStep(page, 4);
@@ -338,7 +338,7 @@ test.describe("BPMN decisions", () => {
     await add.click();
     const dialog = page.getByTestId("bpmn-branch-dialog");
     await expect(dialog.getByRole("heading")).toHaveText("Add a decision");
-    await expect(dialog.getByTestId("bpmn-branch-target").first().locator("option").last()).toHaveText("Done");
+    await expect(dialog.getByTestId("bpmn-branch-target").first().locator("option").last()).toHaveText("End case");
     await expect(dialog.getByTestId("bpmn-branch-save")).toHaveText("Save the decision");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toHaveCount(0);

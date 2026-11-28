@@ -1054,6 +1054,20 @@ def test_the_gateway_branches_keep_their_names():
     assert {f["name"] for f in flows if f["from"] == "G"} == {"Yes", "No"}
 
 
+def test_an_inclusive_gateway_keeps_its_lane_and_the_task_after_it():
+    xml = (
+        BPMN.replace("exclusiveGateway", "inclusiveGateway")
+        .replace('sourceRef="T_ext" targetRef="T_rev"', 'sourceRef="T_ext" targetRef="G"')
+        .replace('sourceRef="T_rev" targetRef="G"', 'sourceRef="G" targetRef="T_rev"')
+        .replace('sourceRef="G" targetRef="E_ok"', 'sourceRef="T_rev" targetRef="E_ok"')
+    )
+    process = case_service.process_from_bpmn(xml)
+    gateway = next(node for node in process["nodes"] if node["id"] == "G")
+    assert gateway["kind"] == "inclusiveGateway"
+    assert gateway["lane"] == "L_rev"
+    assert case_service.reviewer_task(process) == "T_rev"
+
+
 # ---------------------------------------------------------------------------
 # The sandbox run of a case
 # ---------------------------------------------------------------------------

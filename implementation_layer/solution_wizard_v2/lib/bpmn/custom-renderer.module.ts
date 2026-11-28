@@ -142,7 +142,13 @@ function drawGatewayShape(
     class: `gaik-node-shape gaik-role-${role}`,
   });
   svgAppend(parentGfx, diamond);
-  drawIconGroup(parentGfx, kind, cx - 8, cy - 8, 16, colors.icon);
+  if (element.type === "bpmn:InclusiveGateway") {
+    const marker = svgCreate("circle");
+    svgAttr(marker, { cx, cy, r: Math.min(w, h) / 5, fill: "none", stroke: colors.icon, "stroke-width": 2 });
+    svgAppend(parentGfx, marker);
+  } else {
+    drawIconGroup(parentGfx, kind, cx - 8, cy - 8, 16, colors.icon);
+  }
   attachShapeTooltip(diamond, name);
   return diamond;
 }
@@ -228,7 +234,7 @@ class SemanticBpmnRenderer extends BaseRenderer {
       is(element, "bpmn:StartEvent") ||
       is(element, "bpmn:EndEvent") ||
       is(element, "bpmn:ExclusiveGateway") ||
-      is(element, "bpmn:ParallelGateway") ||
+      is(element, "bpmn:ParallelGateway") || is(element, "bpmn:InclusiveGateway") ||
       is(element, "bpmn:DataObjectReference") ||
       is(element, "bpmn:DataStoreReference")
     );
@@ -249,7 +255,7 @@ class SemanticBpmnRenderer extends BaseRenderer {
     if (is(element, "bpmn:StartEvent") || is(element, "bpmn:EndEvent")) {
       return drawEventShape(parentGfx, el);
     }
-    if (is(element, "bpmn:ExclusiveGateway") || is(element, "bpmn:ParallelGateway")) {
+    if (is(element, "bpmn:ExclusiveGateway") || is(element, "bpmn:ParallelGateway") || is(element, "bpmn:InclusiveGateway")) {
       return drawGatewayShape(parentGfx, el);
     }
     if (is(element, "bpmn:DataObjectReference")) {
@@ -276,7 +282,7 @@ class SemanticBpmnRenderer extends BaseRenderer {
       const cy = h / 2;
       return `M ${cx - r},${cy} A ${r},${r} 0 1,0 ${cx + r},${cy} A ${r},${r} 0 1,0 ${cx - r},${cy}`;
     }
-    if (is(shape, "bpmn:ExclusiveGateway") || is(shape, "bpmn:ParallelGateway")) {
+    if (is(shape, "bpmn:ExclusiveGateway") || is(shape, "bpmn:ParallelGateway") || is(shape, "bpmn:InclusiveGateway")) {
       const cx = w / 2;
       const cy = h / 2;
       return `M ${cx} 2 L ${w - 2} ${cy} L ${cx} ${h - 2} L 2 ${cy} Z`;
