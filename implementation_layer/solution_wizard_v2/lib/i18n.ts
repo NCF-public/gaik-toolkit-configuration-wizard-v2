@@ -845,10 +845,6 @@ export type Dict = {
   // ==== the PoC tab's file editor ====
   /** A file in the package's tree, as a button: {name}. */
   pocFileOpen: string;
-  /** The blueprint or a diagram pressed in the package's tree: shown on its own tab ({name}, {tab}). */
-  pocFileInTab: string;
-  /** The button beside it that opens that tab ({tab}). */
-  pocFileGoToTab: string;
   pocFileModeLabel: string;
   pocFileViewPreview: string;
   pocFileViewEdit: string;
@@ -1880,8 +1876,6 @@ const fi: Dict = {
   pocDeployableChanged:
     "Pakettia on muutettu onnistuneen testiajon jälkeen. Aja testi uudelleen, niin käyttöönottopaketin voi ladata.",
   pocFileOpen: "Avaa {name}",
-  pocFileInTab: "{name} näytetään {tab}-välilehdellä, jossa näet sen ajantasaisena.",
-  pocFileGoToTab: "Siirry {tab}-välilehdelle",
   pocFileModeLabel: "Tiedoston näkymä",
   pocFileViewPreview: "Esikatselu",
   pocFileViewEdit: "Muokkaa",
@@ -2981,8 +2975,6 @@ const en: Dict = {
   pocDeployableChanged:
     "The package was changed after the test run that passed. Run the test again to download the deployment package.",
   pocFileOpen: "Open {name}",
-  pocFileInTab: "{name} is shown on the {tab} tab, as it is now.",
-  pocFileGoToTab: "Go to the {tab} tab",
   pocFileModeLabel: "File view",
   pocFileViewPreview: "Preview",
   pocFileViewEdit: "Edit",

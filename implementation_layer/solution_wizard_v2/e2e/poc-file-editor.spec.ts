@@ -365,7 +365,7 @@ test.describe("PoC file editor", () => {
     await expect(editor.getByTestId("poc-file-save")).toHaveCount(0);
   });
 
-  test("a document beside poc/ opens read-only, and the blueprint points to its own tab", async ({ page }) => {
+  test("the files beside poc/, the blueprint and the diagrams included, open read-only", async ({ page }) => {
     await fakePackage(page);
     // The listing with a document beside poc/, as wizard_api gives it after the documentation phase.
     await page.route(`${API}/poc/files`, (route) =>
@@ -375,7 +375,7 @@ test.describe("PoC file editor", () => {
           ready: true,
           problems: [],
           files: FILES,
-          package_files: [...PACKAGE_FILES, "docs/user_guide.md"],
+          package_files: [...PACKAGE_FILES, "workflow.bpmn", "workflow.mmd", "docs/user_guide.md"],
           version: "v1",
         },
       }),
@@ -386,10 +386,16 @@ test.describe("PoC file editor", () => {
       (route) => {
         const path = new URL(route.request().url()).searchParams.get("path") ?? "";
         asked.push(path);
+        const content: Record<string, string> = {
+          "docs/user_guide.md": "# User guide\n\nUpload one invoice per file.\n",
+          "use_case.blueprint.json": '{\n  "use_case": {"id": "invoices"}\n}\n',
+          "workflow.bpmn": '<?xml version="1.0"?>\n<bpmn:definitions id="d1"/>\n',
+          "workflow.mmd": "flowchart LR\n  upload --> extract\n",
+        };
         return route.fulfill({
           json: {
             path,
-            content: "# User guide\n\nUpload one invoice per file.\n",
+            content: content[path] ?? "",
             digest: "d1",
             bytes: 44,
             editable: false,
@@ -415,14 +421,24 @@ test.describe("PoC file editor", () => {
     await page.keyboard.press("Escape");
     await expect(viewer).toHaveCount(0);
 
-    // The blueprint is not opened as a file: the note sends the user to its tab.
-    await tree.locator('li[data-path="use_case.blueprint.json"] button').click();
-    await expect(page.getByTestId("poc-file-editor")).toHaveCount(0);
-    const note = page.getByTestId("poc-file-in-tab");
-    await expect(note).toContainText("use_case.blueprint.json näytetään Blueprint-välilehdellä");
-    await note.getByTestId("poc-file-in-tab-go").click();
-    await expect(page.getByRole("tab", { name: "Blueprint" })).toHaveAttribute("aria-selected", "true");
-    expect(new Set(asked)).toEqual(new Set(["docs/user_guide.md"]));
+    // The blueprint and the diagrams open the same way, as the package carries them.
+    for (const [path, text] of [
+      ["use_case.blueprint.json", '"use_case"'],
+      ["workflow.bpmn", "bpmn:definitions"],
+      ["workflow.mmd", "flowchart LR"],
+    ] as const) {
+      await tree.locator(`li[data-path="${path}"] button`).click();
+      const opened = page.getByTestId("poc-file-editor");
+      await expect(opened.locator("#poc-file-title")).toHaveText(path);
+      await expect(opened.getByTestId("poc-file-note")).toHaveText("Vain luku: tätä tiedostoa ei muokata käsin.");
+      await expect(opened.locator(".cm-content")).toContainText(text);
+      await expect(opened.getByTestId("poc-file-save")).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(opened).toHaveCount(0);
+    }
+    expect(new Set(asked)).toEqual(
+      new Set(["docs/user_guide.md", "use_case.blueprint.json", "workflow.bpmn", "workflow.mmd"]),
+    );
   });
 
   test("an environment file with keys is neither read nor saved, and a path out of the package is refused", async ({
