@@ -66,7 +66,7 @@ describe("caseErrorText", () => {
     const ofCase = caseErrorText(413, refusal("input_too_large", "the case's input would exceed 200 MB in all"), fi, BUSY);
     const ofSession = caseErrorText(
       413,
-      refusal("input_too_large", "the session's case input would exceed 1024 MB in all"),
+      refusal("input_too_large", "the session's input would exceed 1024 MB in all"),
       fi,
       BUSY,
     );
@@ -74,6 +74,18 @@ describe("caseErrorText", () => {
     expect(ofCase).toBe(fi.errors.caseFull.replace("{mb}", "200"));
     expect(ofSession).toBe(fi.errors.sessionFull.replace("{mb}", "1024"));
     expect(ofCase).not.toContain("50");
+  });
+
+  it("names the PoC tab's test data, not a case, when its total is over", () => {
+    const ofTestData = caseErrorText(
+      413,
+      refusal("input_too_large", "the test data would exceed 200 MB in all"),
+      fi,
+      BUSY,
+    );
+
+    expect(ofTestData).toBe(fi.errors.testDataFull.replace("{mb}", "200"));
+    expect(ofTestData).not.toBe(fi.errors.caseFull.replace("{mb}", "200"));
   });
 
   it("says a file with the same name is already there", () => {

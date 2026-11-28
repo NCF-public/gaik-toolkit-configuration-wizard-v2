@@ -3051,7 +3051,7 @@ async def upload_poc_input(
     Only that directory: the package root holds ``run_poc.py``, the file the Job
     executes, and an upload must never be able to become it.
     """
-    from wizard_api.services import input_content, malware_scan, poc_service
+    from wizard_api.services import case_service, input_content, malware_scan, poc_service
     from wizard_api.services.artifact_sync import read_draft_blueprint
 
     session = session_service.get_session(db, session_id)
@@ -3072,8 +3072,13 @@ async def upload_poc_input(
         await malware_scan.check_upload(data)
         # An image is stored without the text its file carries besides the
         # pixels, so neither the agent nor the PoC's model reads that text.
+        # Before the limits below, so they count the bytes that are stored.
         data, removed = await asyncio.to_thread(input_content.without_image_metadata, kind, data)
-        name = poc_service.save_sample_input(poc, file.filename or "", data)
+        # Within the limits a case's input has, and counted with the cases'. Off the
+        # event loop: it waits for the session's input lock and writes the file.
+        name = await asyncio.to_thread(
+            case_service.save_sample_input, session.output_dir, poc, file.filename or "", data
+        )
     # Both name the user's own file and the limit it broke.
     except poc_service.InputTooLargeError as exc:
         raise api_error(413, "input_too_large", str(exc)) from exc
@@ -3156,7 +3161,7 @@ def create_poc_sample_input(
 def delete_poc_input(
     session_id: uuid.UUID, filename: str, db: Session = Depends(get_db)
 ) -> Response:
-    from wizard_api.services import poc_service
+    from wizard_api.services import case_service, poc_service
 
     session = session_service.get_session(db, session_id)
     if session is None:
@@ -3165,7 +3170,8 @@ def delete_poc_input(
     if not poc or not os.path.isdir(poc):
         raise HTTPException(status_code=404, detail="no PoC package")
     try:
-        removed = poc_service.delete_sample_input(poc, filename)
+        # Under the session's input lock, as the upload is.
+        removed = case_service.delete_sample_input(session.output_dir, poc, filename)
     except poc_service.InputRejectedError as exc:
         raise api_error(422, "input_rejected", str(exc)) from exc
     if not removed:

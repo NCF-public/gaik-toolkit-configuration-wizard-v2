@@ -157,6 +157,21 @@ describe("formatPocUploadError", () => {
     expect(refused("too_large", "the file is larger than 50 MB")).toContain("MB");
     expect(refused("empty", "the file is empty", fi)).toBe("Tiedosto on tyhjä.");
     expect(refused("name", "x", fi)).toBe(fi.pocUploadRejected.name);
+    expect(refused("too_many", "the test data already has 20 files; remove one first")).toBe(
+      en.pocUploadRejected.too_many,
+    );
+    expect(refused("too_many", "x", fi)).toBe(fi.pocUploadRejected.too_many);
+  });
+
+  it("says the PoC tab's test data is full, not a case's inputs", () => {
+    const msg = formatPocUploadError(
+      413,
+      { detail: { error: "input_too_large", message: "the test data would exceed 200 MB in all" } },
+      fi,
+      [],
+      "Tiedoston lisäys epäonnistui",
+    );
+    expect(msg).toBe("Testiaineisto ylittäisi yhteensä 200 Mt. Poista ensin jokin testitiedosto.");
   });
 
   it("names a refusal with no known code, or an older api's, generically and in the page's language", () => {
