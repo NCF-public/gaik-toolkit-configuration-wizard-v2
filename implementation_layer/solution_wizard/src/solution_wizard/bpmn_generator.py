@@ -426,8 +426,9 @@ class _BpmnBuilder:
         self._dataobj_ref_for_artifact: Dict[str, str] = {}
         # exception ids consumed by _enrich_approval (discard path); skipped by _enrich_exceptions
         self._consumed_exception_ids: set = set()
-        # Data store -> actual sender node used to position it.
-        self._store_anchor_of: dict[str, str] = {}
+        # Data store -> candidate senders, in workflow order. Layout chooses
+        # the earliest rank, retaining workflow order for parallel senders.
+        self._store_anchor_of: dict[str, tuple[str, ...]] = {}
         self._own_delivery_nodes: list[set[str]] = []
         # set when the "Generate PDF report" task is added
         self._generated_pdf = False
@@ -1030,13 +1031,15 @@ class _BpmnBuilder:
             }
             if not self._generated_pdf and self._passes_every_way(after_requirements):
                 self._own_delivery_nodes.append(after_requirements)
-                self._store_anchor_of[ds_id] = min(after_requirements)
+                self._store_anchor_of[ds_id] = tuple(
+                    node for node in self.nodes if node in after_requirements
+                )
                 for node in sorted(after_requirements):
                     self.nodes[node].data_out.append((self._next_assoc_id(), ds_id))
                 continue
 
             send_id = self._free_id(f"Activity_submit_{_safe(target)}")
-            self._store_anchor_of[ds_id] = send_id
+            self._store_anchor_of[ds_id] = (send_id,)
             send_node = _Node(
                 send_id,
                 "bpmn:sendTask",
@@ -1078,6 +1081,10 @@ class _BpmnBuilder:
         This runs before `_enrich_integration()`, so a subsequent Send Task is
         spliced *after* the PDF -- the natural "generate the report, then submit
         it" order.
+
+        An explicit final report may precede human review: the reviewer can
+        approve the report already produced. Revision after corrections is
+        an explicit workflow step.
 
         Nothing is added when every way to the success end passes a step that
         writes the final report itself (`_own_report_steps`: a generated
@@ -1205,8 +1212,10 @@ class _BpmnBuilder:
         cycles). A way that skips them all, such as a decision's branch to "end"
         past them, another branch of a fork, or a choice that reaches the rest of
         the process past them, makes this false."""
-        return bool(nodes) and "EndEvent_success" not in self._reachable(
-            "StartEvent_1", without=nodes
+        return (
+            bool(nodes)
+            and "EndEvent_success" in self._reachable("StartEvent_1")
+            and "EndEvent_success" not in self._reachable("StartEvent_1", without=nodes)
         )
 
     def _map_done_choices(self, reports: set[str]) -> None:
@@ -1558,7 +1567,8 @@ class _BpmnBuilder:
         pool_bottom = POOL_Y + pool_height
         store_rows: dict[float, int] = {}
         for ds_id, _, _ in self.data_stores:
-            send_id = self._store_anchor_of.get(ds_id, "")
+            candidates = self._store_anchor_of.get(ds_id, ())
+            send_id = min(candidates, key=lambda node: self.nodes[node].rank, default="")
             if send_id in self.bounds:
                 sx, sy, sw, sh = self.bounds[send_id]
                 cx = sx + sw / 2

@@ -96,3 +96,17 @@ def test_parameters_that_are_not_an_object_keep_the_rest_of_the_agents_process()
     xml, _, _ = bpmn_service.generate_bpmn_view(V2, session_id="s", agent_draft=draft)
 
     assert 'id="Gateway_exc_bad_scan"' in xml
+    reduced = v2_to_v1_dict(V2, session_id="s")
+    reduced["workflow"]["steps"][0]["parameters"] = {"keep": "existing"}
+    draft["workflow"]["steps"][0]["parameters"] = {
+        "integration_target": "erp_system",
+        "discard": "unrelated draft parameter",
+    }
+    combined = bpmn_service.with_agent_process(reduced, V2, draft)
+    steps = {step["id"]: step for step in combined["workflow"]["steps"]}
+    assert steps["extract"]["parameters"] == {
+        "keep": "existing",
+        "integration_target": "erp_system",
+    }
+    assert "integration_target" not in steps["send_erp"]["parameters"]
+    assert combined["business_process"]["exceptions"] == draft["business_process"]["exceptions"]

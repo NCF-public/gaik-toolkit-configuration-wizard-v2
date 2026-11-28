@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 from solution_wizard.blueprint import Blueprint
-from solution_wizard.bpmn_generator import generate_bpmn
+from solution_wizard.bpmn_generator import _BpmnBuilder, _Flow, generate_bpmn
 
 NS = {"bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL"}
 END = "EndEvent_success"
@@ -470,6 +470,75 @@ def test_a_sender_before_the_own_report_keeps_the_generated_sender():
     (sender,) = [node for node, kind in kinds.items() if kind == "sendTask"]
     assert PDF not in kinds
     assert ("Activity_make_doc", sender) in flows
+
+
+def test_review_can_approve_the_report_already_produced():
+    bp = _blueprint(
+        [
+            UPLOAD,
+            EXTRACT,
+            _report("make_doc", ["extract"]),
+            _step("review", "human_review", deps=["make_doc"], inputs=["make_doc_pdf"]),
+            _send("deliver", ["review"]),
+        ],
+        {**BASE_ARTS, **_report_art("make_doc")},
+    )
+    flows, kinds, _ = _flows(bp)
+    assert PDF not in kinds
+    assert "sendTask" not in kinds.values()
+    assert ("Activity_make_doc", "Activity_review") in flows
+    assert ("Gateway_approve_review", "Activity_deliver") in flows
+    assert ("Gateway_approve_review", "EndEvent_rejected_review") in flows
+    assert not any(source == "EndEvent_rejected_review" for source, _ in flows)
+    _assert_each_finished_run_passes_once(bp, {"Activity_make_doc"}, {"Activity_deliver"})
+
+
+@pytest.mark.parametrize(
+    ("edges", "expected"),
+    [
+        ([("StartEvent_1", "writer"), ("writer", "EndEvent_success")], True),
+        ([("StartEvent_1", "writer"), ("writer", "writer")], False),
+        ([("StartEvent_1", "writer"), ("writer", "writer"), ("writer", "EndEvent_success")], True),
+        (
+            [
+                ("StartEvent_1", "writer"),
+                ("writer", "EndEvent_success"),
+                ("StartEvent_1", "EndEvent_success"),
+            ],
+            False,
+        ),
+    ],
+)
+def test_every_way_requires_a_reachable_success(edges, expected):
+    builder = _BpmnBuilder(_blueprint([UPLOAD, EXTRACT], BASE_ARTS))
+    builder.flows = [_Flow(f"flow_{i}", source, target) for i, (source, target) in enumerate(edges)]
+    assert builder._passes_every_way({"writer"}) is expected
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+def test_a_shared_store_uses_flow_order_with_workflow_order_for_parallel_senders(parallel):
+    bp = _blueprint(
+        [
+            UPLOAD,
+            EXTRACT,
+            _send("z_first", ["extract"]),
+            _send("a_second", ["extract"] if parallel else ["z_first"]),
+        ],
+        BASE_ARTS,
+        outputs=("structured_json",),
+    )
+    builder = _BpmnBuilder(bp)
+    builder.build()
+    ((store, _, _),) = builder.data_stores
+    # Both writers remain linked to the one store.
+    for sender in ("Activity_z_first", "Activity_a_second"):
+        assert any(target == store for _, target in builder.nodes[sender].data_out)
+    sx, _, sw, _ = builder.bounds["Activity_z_first"]
+    dx, _, dw, _ = builder.bounds[store]
+    assert dx + dw / 2 == sx + sw / 2
+    if not parallel:
+        ax, _, aw, _ = builder.bounds["Activity_a_second"]
+        assert dx + dw / 2 != ax + aw / 2
 
 
 @pytest.mark.parametrize(
