@@ -94,36 +94,36 @@ describe("what a decision branch to the end leads to", () => {
     const early = endLeadsTo(mapping, { after: "review" }, [{ id: "review" }]);
     const late = endLeadsTo(mapping, { decision: { id: "finish" } });
     expect(endChoiceNote(early, t)).toContain(
-      "If this branch skips the report step, a report can be added at the end.",
+      "Ends the whole case immediately, including parallel work.",
     );
     expect(endChoiceNote(early, t)).toContain(
-      "If this branch skips a delivery step, a delivery can be added at the end.",
+      "No later report or delivery steps run.",
     );
     expect(endChoiceNote(late, t)).toContain("The report is already complete at this point.");
     expect(endChoiceNote(late, t)).toContain("The workflow’s own delivery steps have already run at this point.");
     expect(endChoiceNote(late, fi)).toContain("Raportti on jo valmis tässä kohdassa.");
   });
 
-  it("names the end choice by what follows it", () => {
-    expect(endChoiceLabel({ report: true, delivery: true }, fi)).toBe("Valmis: raportti ja vienti");
-    expect(endChoiceLabel({ report: true, delivery: false }, fi)).toBe("Valmis: raportti");
-    expect(endChoiceLabel({ report: false, delivery: true }, fi)).toBe("Valmis: vienti");
-    expect(endChoiceLabel({ report: false, delivery: false }, fi)).toBe("Valmis");
-    expect(endChoiceLabel({ report: true, delivery: true }, t)).toBe("Done: report and delivery");
-    expect(endChoiceLabel({ report: false, delivery: false }, t)).toBe("Done");
+  it("names the explicit stop independently of the normal finishing tasks", () => {
+    for (const report of [false, true]) {
+      for (const delivery of [false, true]) {
+        expect(endChoiceLabel({ report, delivery }, fi)).toBe("Päätä käsittely");
+        expect(endChoiceLabel({ report, delivery }, t)).toBe("End case");
+      }
+    }
   });
 
-  it("says where a case that ends without a result goes, only when something follows the end", () => {
+  it("always explains that an explicit end stops parallel work and future outputs", () => {
     expect(endChoiceNote({ report: true, delivery: true }, fi)).toBe(
-      "Valmis kulkee raportin ja viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+      fi.bpmnDecisionStopNote,
     );
     expect(endChoiceNote({ report: false, delivery: true }, fi)).toBe(
-      "Valmis kulkee viennin kautta. Jos käsittely päättyy ilman tulosta, lisää hylkäyspolku.",
+      fi.bpmnDecisionStopNote,
     );
     expect(endChoiceNote({ report: true, delivery: false }, t)).toBe(
-      "Done goes through the report. If handling ends without a result, add a rejection path.",
+      "Ends the whole case immediately, including parallel work. No later report or delivery steps run.",
     );
-    expect(endChoiceNote({ report: false, delivery: false }, fi)).toBeNull();
+    expect(endChoiceNote({ report: false, delivery: false }, fi)).toBe(fi.bpmnDecisionStopNote);
   });
 });
 

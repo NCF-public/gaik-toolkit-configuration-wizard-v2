@@ -257,6 +257,7 @@ export type Dict = {
   bpmnDecisionTarget: string;
   /** The target that ends the process as done, when nothing follows the end. */
   bpmnDecisionEnd: string;
+  bpmnDecisionStopNote: string;
   /** The same, when the end passes the PDF report and the delivery (send task) first. */
   bpmnDecisionEndReportDelivery: string;
   bpmnDecisionEndReport: string;
@@ -1325,7 +1326,8 @@ const fi: Dict = {
   bpmnDecisionBranch: "Haara {n}",
   bpmnDecisionCondition: "Ehto",
   bpmnDecisionTarget: "Johtaa vaiheeseen",
-  bpmnDecisionEnd: "Valmis",
+  bpmnDecisionEnd: "Päätä käsittely",
+  bpmnDecisionStopNote: "Päättää koko käsittelyn heti, myös rinnakkaiset haarat. Myöhempiä raportti- tai vientivaiheita ei suoriteta.",
   bpmnDecisionEndReportDelivery: "Valmis: raportti ja vienti",
   bpmnDecisionEndReport: "Valmis: raportti",
   bpmnDecisionEndDelivery: "Valmis: vienti",
@@ -2425,7 +2427,8 @@ const en: Dict = {
   bpmnDecisionBranch: "Branch {n}",
   bpmnDecisionCondition: "Condition",
   bpmnDecisionTarget: "Leads to",
-  bpmnDecisionEnd: "Done",
+  bpmnDecisionEnd: "End case",
+  bpmnDecisionStopNote: "Ends the whole case immediately, including parallel work. No later report or delivery steps run.",
   bpmnDecisionEndReportDelivery: "Done: report and delivery",
   bpmnDecisionEndReport: "Done: report",
   bpmnDecisionEndDelivery: "Done: delivery",

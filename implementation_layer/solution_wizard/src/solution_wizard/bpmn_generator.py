@@ -1051,6 +1051,8 @@ class _BpmnBuilder:
         targets = spec.get("integration_targets") or []
         if not targets:
             return
+        if "EndEvent_success" not in self._reachable("StartEvent_1"):
+            return
         approvals = set(self._approval_gateways)
         requirements = reports | approvals
         before_report = self._reachable("StartEvent_1", without=reports) if reports else set()
@@ -1138,23 +1140,30 @@ class _BpmnBuilder:
         Nothing is added when every way to the success end passes a step that
         writes the final report itself (`_own_report_steps`: a generated
         pdf/report artifact with final_output that it produces), or, as before,
-        when a step's id or component names a PDF/report generator
-        (case-insensitive). When a way skips the agent's report steps (a
-        decision's branch to "end" past them, say), the task is added as
-        before, at the end, so every successful path still renders a report;
-        the path through the agent's step then shows two. Nothing is rewired.
+        when a step's id or component names a PDF/report generator after the
+        approvals on every normal completion path. An explicit "end" branch
+        stops the case and never enters this finishing path. When another
+        normal completion skips the report, the fallback stays at the end.
         """
         spec = self.bp.technical_spec if isinstance(self.bp.technical_spec, dict) else {}
         if not wants_report(spec.get("output_types")):
             return
+        if "EndEvent_success" not in self._reachable("StartEvent_1"):
+            return
         own_reports = self._step_nodes(self._own_report_steps())
         rejected = own_reports - reports
-        if any(
-            named_report_step([step]) and self._lookup_node_for_step(step["id"]) not in rejected
+        approvals = set(self._approval_gateways)
+        before_approval = self._reachable("StartEvent_1", without=approvals) if approvals else set()
+        named = {
+            node
             for step in self._step_dicts()
-        ):
-            return
-        if self._passes_every_way(reports):
+            if named_report_step([step])
+            and (node := self._lookup_node_for_step(step["id"]))
+            and self.nodes[node].tag.endswith("Task")
+            and node not in rejected | before_approval
+            and not self._reachable(node, forward_only=True) & approvals
+        }
+        if self._passes_every_way(reports | named):
             return
         self._generated_pdf = True
 
@@ -1221,13 +1230,21 @@ class _BpmnBuilder:
                 self._add_flow(after_node, xg)
             # Each branch's step, and the nodes a flow into it can lead to: the
             # step itself, or the join before it when it depends on several.
+            stop = (
+                self._decision_end(dp.id, xg)
+                if any(br.target in ("end", "") for br in dp.branches)
+                else None
+            )
             targets = [
-                "EndEvent_success"
-                if br.target in ("end", "")
-                else self._lookup_node_for_step(br.target)
+                stop if br.target in ("end", "") else self._lookup_node_for_step(br.target)
                 for br in dp.branches
             ]
             entries = [self._entries_of(br.target, tgt) for br, tgt in zip(dp.branches, targets)]
+            for br, entry in zip(dp.branches, entries):
+                if br.target in ("end", ""):
+                    # Replace a terminal step's existing completion edge too,
+                    # rather than leaving an unlabelled success alternative.
+                    entry.add("EndEvent_success")
             outgoing = self._dissolve_fork(after_node, xg, outgoing, set().union(*entries))
             for br, tgt, entry in zip(dp.branches, targets, entries):
                 if not tgt:
@@ -1243,6 +1260,8 @@ class _BpmnBuilder:
                 if moved is not None:
                     outgoing.remove(moved)
                     moved.name = br.condition or moved.name
+                    if br.target in ("end", ""):
+                        moved.tgt = tgt
                 else:
                     moved = self._add_flow(xg, tgt, name=br.condition)
                 if tgt in ancestors:
@@ -1333,6 +1352,15 @@ class _BpmnBuilder:
         )
         self._map(xg, "decision_point", f"business_process.decision_points[{i}]")
         return xg
+
+    def _decision_end(self, decision_id: str, beside: str) -> str:
+        """An explicit stop is separate from normal report/delivery completion."""
+        end = self._free_id(f"EndEvent_decision_{_safe(decision_id)}")
+        self.nodes[end] = _Node(
+            end, "bpmn:endEvent", "Process ended", self.nodes[beside].lane, "event"
+        )
+        self._map(end, "end_event", f"derived:end_after_decision:{decision_id}")
+        return end
 
     def _entries_of(self, step_id: str, node: Optional[str]) -> set:
         """The nodes a flow into ``step_id`` (drawn as ``node``) can lead to: the
@@ -1802,6 +1830,10 @@ class _BpmnBuilder:
             inner.append(f"      <bpmn:incoming>{fid}</bpmn:incoming>")
         for fid in node.outgoing:
             inner.append(f"      <bpmn:outgoing>{fid}</bpmn:outgoing>")
+        if node.tag == "bpmn:endEvent" and node.id != "EndEvent_success":
+            # Rejection, exceptions and explicit stops end the whole case,
+            # including tokens waiting in another branch of a parallel fork.
+            inner.append(f'      <bpmn:terminateEventDefinition id="Terminate_{node.id}" />')
         # data associations (tasks only)
         for assoc_id, ref_id, prop_id in node.data_in:
             inner.append(f'      <bpmn:property id="{prop_id}" name="__targetRef_placeholder" />')

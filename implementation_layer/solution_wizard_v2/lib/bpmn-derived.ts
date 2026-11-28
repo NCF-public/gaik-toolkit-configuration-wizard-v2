@@ -43,14 +43,12 @@ export function isDerivedElement(elementId: string, mapping: BpmnMapping, steps:
   );
 }
 
-/** What the diagram's successful end passes before it ends: the report, a delivery, both or neither. */
+/** Normal finishing tasks and work already completed at the chosen anchor. */
 export type EndLeadsTo = { report: boolean; delivery: boolean; ownReport?: DoneWork; ownDelivery?: DoneWork };
 
 /**
- * What a decision branch to the end leads to, read from the boxes the
- * generator draws (`pdf_generation`, `send_task`): every successful path passes
- * them on its way to the end, a branch to the end included. The mapping also
- * describes any report or delivery covered by explicit steps at the anchor.
+ * Read the normal finishing tasks and any report or delivery already covered
+ * by explicit steps at the anchor. An explicit stop does not enter new tasks.
  */
 export function endLeadsTo(
   mapping: BpmnMapping,
@@ -72,41 +70,26 @@ export function endLeadsTo(
 export type EndChoiceTexts = Pick<
   Dict,
   | "bpmnDecisionEnd"
-  | "bpmnDecisionEndReportDelivery"
-  | "bpmnDecisionEndReport"
-  | "bpmnDecisionEndDelivery"
-  | "bpmnDecisionEndNoteReportDelivery"
-  | "bpmnDecisionEndNoteReport"
-  | "bpmnDecisionEndNoteDelivery"
-  | "bpmnDecisionEndNoteSuccess"
+  | "bpmnDecisionStopNote"
   | "bpmnDecisionEndReportComplete"
-  | "bpmnDecisionEndReportConditional"
   | "bpmnDecisionEndDeliveryComplete"
-  | "bpmnDecisionEndDeliveryConditional"
 >;
 
-/** The branch dialog's end choice: "done", with what follows it. */
-export function endChoiceLabel(leads: EndLeadsTo, t: EndChoiceTexts): string {
-  if (leads.report && leads.delivery) return t.bpmnDecisionEndReportDelivery;
-  if (leads.report) return t.bpmnDecisionEndReport;
-  if (leads.delivery) return t.bpmnDecisionEndDelivery;
+/** An explicit end stops the case, rather than entering the finishing steps. */
+export function endChoiceLabel(_leads: EndLeadsTo, t: EndChoiceTexts): string {
   return t.bpmnDecisionEnd;
 }
 
-/** Explain the successful end and any finishing actions already covered by the workflow. */
+/** Describe the stop and any finishing work already performed before it. */
 export function endChoiceNote(leads: EndLeadsTo, t: EndChoiceTexts): string | null {
-  const notes: string[] = [];
-  if (leads.report && leads.delivery) notes.push(t.bpmnDecisionEndNoteReportDelivery);
-  else if (leads.report) notes.push(t.bpmnDecisionEndNoteReport);
-  else if (leads.delivery) notes.push(t.bpmnDecisionEndNoteDelivery);
-  else if (leads.ownReport || leads.ownDelivery) notes.push(t.bpmnDecisionEndNoteSuccess);
-  if (leads.ownReport) {
-    notes.push(leads.ownReport === "complete" ? t.bpmnDecisionEndReportComplete : t.bpmnDecisionEndReportConditional);
+  const notes: string[] = [t.bpmnDecisionStopNote];
+  if (leads.ownReport === "complete") {
+    notes.push(t.bpmnDecisionEndReportComplete);
   }
-  if (leads.ownDelivery) {
-    notes.push(leads.ownDelivery === "complete" ? t.bpmnDecisionEndDeliveryComplete : t.bpmnDecisionEndDeliveryConditional);
+  if (leads.ownDelivery === "complete") {
+    notes.push(t.bpmnDecisionEndDeliveryComplete);
   }
-  return notes.length ? notes.join(" ") : null;
+  return notes.join(" ");
 }
 
 /** Why the box of mapping kind `kind` is drawn; the general text for any other kind. */

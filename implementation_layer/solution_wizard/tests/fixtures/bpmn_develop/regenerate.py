@@ -38,6 +38,27 @@ def main() -> None:
     sys.path.insert(0, str(TESTS))
     import test_bpmn_agent_report_steps as shapes
 
+    if sys.argv[1:] == ["--stops"]:
+        from solution_wizard.blueprint import Blueprint
+        from solution_wizard.bpmn_generator import generate_bpmn
+
+        destination = HERE.parent / "bpmn_stops"
+        destination.mkdir(exist_ok=True)
+        count = 0
+        for name, build in sorted(shapes.DEVELOP_SHAPES.items()):
+            data = build()
+            if any(
+                branch["target"] in ("end", "")
+                for decision in data["business_process"]["decision_points"]
+                for branch in decision["branches"]
+            ):
+                (destination / f"{name}.bpmn").write_text(
+                    generate_bpmn(Blueprint.model_validate(data)), encoding="utf-8", newline="\n"
+                )
+                count += 1
+        print(f"wrote {count} explicit-stop fixtures from the current generator")
+        return
+
     paths = []
     for name, build in sorted(shapes.DEVELOP_SHAPES.items()):
         path = HERE / f"{name}.json"

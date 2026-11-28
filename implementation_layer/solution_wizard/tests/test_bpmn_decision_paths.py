@@ -305,19 +305,16 @@ def test_every_successful_path_passes_the_pdf_report_and_the_submission():
     assert [s for s, t, _ in flows if t == END] == ["Activity_submit_erp_system"]
 
 
-def test_the_alternative_endings_meet_at_an_exclusive_merge_before_the_report():
+def test_an_explicit_stop_is_separate_from_the_approved_report_path():
     flows, kinds = _flows(_invoice())
 
-    merge = next(t for s, t, _ in flows if s != t and t.startswith("Gateway_merge"))
-    assert kinds[merge] == "exclusiveGateway"
-    sources = {s for s, t, _ in flows if t == merge}
-    assert sources == {"Gateway_decision_auto", "Gateway_approve_manager"}
-    assert [t for s, t, _ in flows if s == merge] == ["Activity_generate_pdf"]
+    assert ("Gateway_decision_auto", "EndEvent_decision_auto") in {(s, t) for s, t, _ in flows}
+    assert ("Gateway_approve_manager", "Activity_generate_pdf") in {(s, t) for s, t, _ in flows}
+    assert not any(node.startswith("Gateway_merge") for node in kinds)
 
 
-def test_a_triage_with_two_endings_submits_on_both():
-    """A second, different process: urgent tickets are escalated, the rest end;
-    both go to the ticket system, and there is no report."""
+def test_triage_stops_or_submits_through_the_escalation_path():
+    """Urgent tickets are escalated and submitted; the explicit end stops."""
     steps = [
         dict(_step("classify", inputs=["src"]), outputs=["out"]),
         _step("escalate", "user_task", deps=["classify"]),
@@ -341,6 +338,7 @@ def test_a_triage_with_two_endings_submits_on_both():
 
     assert "Activity_generate_pdf" not in kinds
     assert not _reaches_end_without(flows, _start(kinds), "Activity_submit_ticket_system")
+    assert ("Gateway_decision_urgent", "EndEvent_decision_urgent", "normal") in flows
     assert [(s, n) for s, t, n in flows if t == "Activity_escalate"] == [
         ("Gateway_decision_urgent", "urgent")
     ]
@@ -443,10 +441,8 @@ def test_without_a_report_or_an_integration_the_endings_are_left_as_they_are():
     flows, kinds = _flows(_invoice(outputs=("structured_json",), targets=()))
 
     assert not any(nid.startswith("Gateway_merge") for nid in kinds)
-    assert {s for s, t, _ in flows if t == END} == {
-        "Gateway_decision_auto",
-        "Gateway_approve_manager",
-    }
+    assert {s for s, t, _ in flows if t == END} == {"Gateway_approve_manager"}
+    assert ("Gateway_decision_auto", "EndEvent_decision_auto") in {(s, t) for s, t, _ in flows}
 
 
 def test_a_single_path_is_drawn_as_before():
@@ -487,9 +483,9 @@ def test_a_decision_after_a_step_that_feeds_a_join_keeps_the_join():
         flows, kinds = _flows(_blueprint(steps, decisions=decisions))
 
         assert all(s in kinds and t in kinds for s, t, _ in flows)
-        # A branch may bypass post and finish while its sibling still reaches
-        # this join. Wait for active inputs, rather than an untaken branch.
-        assert kinds["Gateway_join_post"] == "inclusiveGateway"
+        # An explicit end terminates the case. The sibling must not pass post
+        # alone; a continuing case still needs both dependency inputs.
+        assert kinds["Gateway_join_post"] == "parallelGateway"
         sources = {s for s, t, _ in flows if t == "Gateway_join_post"}
         assert "Gateway_decision_ok_a" in sources
         assert len(sources) == 2

@@ -11,7 +11,8 @@ live run: ``invoice_pdf_report`` and ``erp_submission``, both
   ``source: user_upload``; an intermediate PDF is not the final output.)
 - The submission: a step whose ``parameters.integration_target`` is the
   target's exact name. Its data store stays, written by that step.
-- A decision's branch to "end" still passes the report and the submission once.
+- Normal completion passes its report and submission; an explicit "end" or
+  rejection terminates the case, including its other parallel tokens.
 
 The checks walk the drawn diagram as a case would run it (`_runs`): every
 choice at an exclusive gateway, every way out of a fork, a join waiting for
@@ -152,7 +153,7 @@ def _back_edges(flows):
     return back
 
 
-def _runs(bp):
+def _runs(bp, *, newest_first=False):
     """Every way a case can run through the drawn diagram.
 
     A token at an exclusive gateway with several ways takes each in turn (a way
@@ -163,6 +164,11 @@ def _runs(bp):
     ``(nodes in the order passed, nodes a token was left waiting at)`` per run.
     """
     flows, kinds, _ = _flows(bp)
+    terminating = {
+        event.get("id")
+        for event in ET.fromstring(generate_bpmn(bp)).findall(".//bpmn:endEvent", NS)
+        if event.find("bpmn:terminateEventDefinition", NS) is not None
+    }
     # Build the step-level history independently of the generator's XML graph.
     # A decision can establish that one step precedes another even without a
     # depends_on edge. Rework never adds to this forward history.
@@ -234,7 +240,7 @@ def _runs(bp):
                     break
                 waiting[ready] = 0
                 pending = [ready]
-            n = pending.pop(0)
+            n = pending.pop(-1 if newest_first else 0)
             kind = kinds[n]
             if kind == "exclusiveGateway" and len(out.get(n, [])) > 1:
                 for t in out[n]:
@@ -251,6 +257,9 @@ def _runs(bp):
                     continue
                 waiting[n] = 0
             order = order + [n]
+            if n in terminating:
+                runs.append((order, set()))
+                return
             if kind != "endEvent":
                 pending = pending + out.get(n, [])
         runs.append((order, {n for n, c in waiting.items() if c}))
@@ -383,7 +392,8 @@ def _assert_safe(bp):
     ids = [e.get("id") for e in root.iter() if e.get("id")]
     assert len(ids) == len(set(ids)), [i for i in ids if ids.count(i) > 1]
     runs = _runs(bp)
-    finished = [o for o, _ in runs if END in o]
+    ends = {event.get("id") for event in root.findall(".//bpmn:endEvent", NS)}
+    finished = [o for o, _ in runs if ends.intersection(o)]
     assert finished, runs
     for order, waiting in runs:
         assert not waiting, (order, waiting)
@@ -451,11 +461,8 @@ def test_alternatives_beside_parallel_work_use_an_inclusive_join_before_a_step()
 # -- a way that skips the agent's steps keeps the generated boxes ---------------
 
 
-def test_a_branch_to_end_past_the_own_steps_keeps_the_generated_boxes():
-    """The auto-approval shape written with "end": the small invoice skips the
-    agent's report and send steps, so the diagram keeps develop's generated
-    report and submission at the end. The reviewed path shows two of each;
-    nothing is rewired."""
+def test_a_branch_to_end_stops_instead_of_adding_generated_boxes():
+    """An explicit end stops; the approved completion uses the own steps."""
     steps = [
         UPLOAD,
         EXTRACT,
@@ -467,13 +474,12 @@ def test_a_branch_to_end_past_the_own_steps_keeps_the_generated_boxes():
     bp = _blueprint(steps, {**BASE_ARTS, **_report_art("make_doc")}, decisions=[decision])
     flows, kinds, _ = _flows(bp)
 
-    assert PDF in kinds
-    send = "Activity_submit_ERP_system__approved_invoice_data_"
-    assert send in kinds
-    assert (PDF, send) in flows
+    assert PDF not in kinds
+    assert "sendTask" not in kinds.values()
     assert ("Gateway_decision_auto", "Activity_make_doc") not in flows
     for order in _assert_safe(bp):
-        assert order.index(PDF) < order.index(send)
+        if END in order:
+            assert order.index("Activity_make_doc") < order.index("Activity_deliver")
 
 
 def test_a_branch_pointed_at_the_own_report_step_draws_each_once():
@@ -573,7 +579,10 @@ def test_a_marked_sender_before_the_review_leaves_the_report_after_approval():
     bp = _blueprint(steps, BASE_ARTS)
 
     for order in _assert_safe(bp):
-        assert order.index("Activity_review") < order.index(PDF)
+        if END in order:
+            assert order.index("Activity_review") < order.index(PDF)
+        else:
+            assert PDF not in order
 
 
 def test_a_sender_before_approval_keeps_the_generated_sender():
@@ -767,7 +776,7 @@ def test_a_sender_on_one_way_of_a_fork_keeps_the_submit_task():
     _, kinds, _ = _flows(bp)
 
     assert "Activity_submit_ERP_system__approved_invoice_data_" in kinds
-    assert kinds["Gateway_merge_success"] == "inclusiveGateway"
+    assert kinds["Gateway_merge_success"] == "parallelGateway"
     _assert_safe(bp)
 
 
@@ -853,7 +862,8 @@ def test_two_decisions_and_a_join_stay_safe():
 
     assert len(ids) == len(set(ids))
     _, kinds, _ = _flows(bp)
-    assert PDF in kinds
+    assert PDF not in kinds
+    assert kinds["Gateway_join_make_doc"] == "parallelGateway"
     _assert_safe(bp)
 
 
@@ -905,6 +915,84 @@ def test_a_later_named_renderer_is_not_disqualified_by_an_earlier_unreviewed_rep
     )
     _, kinds, _ = _flows(bp)
     assert PDF not in kinds
+
+
+@pytest.mark.parametrize("placement", ["before", "parallel", "before_second_review", "one_branch"])
+def test_a_named_pdf_step_must_follow_approval_on_every_completion_path(placement):
+    review = _step("review", "human_review", deps=["extract"], inputs=["record"])
+    renderer = _step("parse_pdf", deps=["upload"], outputs=["parsed"])
+    if placement == "before":
+        steps = [UPLOAD, renderer, {**EXTRACT, "depends_on": ["parse_pdf"]}, review]
+    elif placement == "parallel":
+        steps = [
+            UPLOAD,
+            EXTRACT,
+            review,
+            {**renderer, "depends_on": ["extract"]},
+            _step("post", deps=["review", "parse_pdf"]),
+        ]
+    elif placement == "before_second_review":
+        steps = [
+            UPLOAD,
+            EXTRACT,
+            review,
+            {**renderer, "depends_on": ["review"]},
+            _step("second_review", "human_review", deps=["parse_pdf"], inputs=["record"]),
+        ]
+    else:
+        steps = [
+            UPLOAD,
+            EXTRACT,
+            review,
+            {**renderer, "depends_on": ["review"]},
+            _step("archive", deps=["review"]),
+        ]
+    decisions = (
+        [_decision("format", "review", ("pdf", "parse_pdf"), ("archive", "archive"))]
+        if placement == "one_branch"
+        else []
+    )
+    bp = _blueprint(steps, BASE_ARTS, targets=(), decisions=decisions)
+    _, kinds, _ = _flows(bp)
+    assert PDF in kinds
+
+
+@pytest.mark.parametrize("newest_first", [False, True])
+def test_rejecting_a_review_beside_parallel_work_stops_before_report_and_submission(newest_first):
+    bp = Blueprint.model_validate(_shape_two_decisions_and_a_join())
+    rejected = [
+        order
+        for order, _ in _runs(bp, newest_first=newest_first)
+        if "EndEvent_rejected_review" in order
+    ]
+    assert rejected
+    for order in rejected:
+        assert "Activity_make_doc" not in order
+        assert "Activity_deliver" not in order
+        assert PDF not in order
+        assert not any(node.startswith("Activity_submit_") for node in order)
+
+
+@pytest.mark.parametrize("newest_first", [False, True])
+def test_an_explicit_end_terminates_parallel_work_without_report_or_submission(newest_first):
+    bp = Blueprint.model_validate(_shape_two_decisions_and_a_join())
+    root = ET.fromstring(generate_bpmn(bp))
+    branch = next(
+        flow
+        for flow in root.findall(".//bpmn:sequenceFlow", NS)
+        if flow.get("sourceRef") == "Gateway_decision_auto" and flow.get("name") == "small"
+    )
+    stop = branch.get("targetRef")
+    event = root.find(f'.//bpmn:endEvent[@id="{stop}"]', NS)
+    assert event is not None
+    assert event.find("bpmn:terminateEventDefinition", NS) is not None
+    stopped = [order for order, _ in _runs(bp, newest_first=newest_first) if stop in order]
+    assert stopped
+    for order in stopped:
+        assert "Activity_make_doc" not in order
+        assert "Activity_deliver" not in order
+        assert PDF not in order
+        assert not any(node.startswith("Activity_submit_") for node in order)
 
 
 def test_report_review_filter_does_not_change_a_workflow_without_report_output():
@@ -963,10 +1051,9 @@ def test_the_shared_rules_read_final_output_as_the_blueprint_does():
 # -- the reviewed shapes draw as develop does -----------------------------------
 #
 # In each shape a way to the end skips the agent's own steps.
-# Six drawings still match develop byte for byte. Two correct mixed success
-# merges; one also corrects the upstream join whose input can be bypassed.
-# The pinned develop drawings
-# stay intact so that the allowed correction is visible in the test below.
+# Completion drawings keep the historical layout; rejection now terminates.
+# Four drawings with explicit stops have separate snapshots in bpmn_stops.
+# The pinned develop drawings stay intact as the historical comparison.
 # tests/fixtures/bpmn_develop/ holds each
 # blueprint (<name>.json) and develop's drawing of it (<name>.bpmn), made at the
 # commit in tests/fixtures/bpmn_develop/DEVELOP_COMMIT by
@@ -1082,45 +1169,41 @@ def test_every_reviewed_shape_completes_without_duplicate_visits(name):
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "bpmn_develop"
+STOP_FIXTURES = FIXTURES.parent / "bpmn_stops"
 
 
 @pytest.mark.parametrize("name", sorted(DEVELOP_SHAPES))
-def test_reviewed_shapes_match_develop_except_corrected_mixed_merges(name):
+def test_reviewed_shapes_match_pinned_completion_and_stop_drawings(name):
     blueprint = json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
     # The fixture is the blueprint the shape builds, so a change to the shape
     # is not silently tested against an old drawing.
     assert blueprint == json.loads(json.dumps(DEVELOP_SHAPES[name]()))
-    expected = (FIXTURES / f"{name}.bpmn").read_text(encoding="utf-8").replace("\r\n", "\n")
-    if name in {"sender_on_one_way_of_a_fork", "two_decisions_and_a_join"}:
-        # Keep the original develop snapshot. Only the previously incorrect
-        # success merge changes from exclusive to inclusive in these drawings.
-        expected, corrected = re.subn(
-            r'<bpmn:exclusiveGateway id="Gateway_merge_success">(.*?)</bpmn:exclusiveGateway>',
-            r'<bpmn:inclusiveGateway id="Gateway_merge_success">\1</bpmn:inclusiveGateway>',
+    has_stop = any(
+        branch["target"] in ("end", "")
+        for decision in blueprint["business_process"]["decision_points"]
+        for branch in decision["branches"]
+    )
+    directory = STOP_FIXTURES if has_stop else FIXTURES
+    expected = (directory / f"{name}.bpmn").read_text(encoding="utf-8").replace("\r\n", "\n")
+    if not has_stop:
+        # These historical completion drawings keep their layout and flows.
+        # Only rejection now terminates the case instead of one token.
+        expected = re.sub(
+            r'(<bpmn:endEvent id="(?!EndEvent_success")([^\"]+)"[^>]*>\n)(.*?)(    </bpmn:endEvent>)',
+            lambda m: m[1]
+            + m[3]
+            + f'      <bpmn:terminateEventDefinition id="Terminate_{m[2]}" />\n'
+            + m[4],
             expected,
             flags=re.DOTALL,
         )
-        assert corrected == 1
-        expected = expected.replace(
-            'bpmnElement="Gateway_merge_success" isMarkerVisible="true"',
-            'bpmnElement="Gateway_merge_success"',
-        )
-    if name == "two_decisions_and_a_join":
-        expected, corrected = re.subn(
-            r'<bpmn:parallelGateway id="Gateway_join_make_doc">(.*?)</bpmn:parallelGateway>',
-            r'<bpmn:inclusiveGateway id="Gateway_join_make_doc">\1</bpmn:inclusiveGateway>',
-            expected,
-            flags=re.DOTALL,
-        )
-        assert corrected == 1
 
     assert generate_bpmn(Blueprint.model_validate(blueprint)) == expected
 
 
-def test_a_choice_that_skips_the_report_through_a_rework_loop_keeps_the_generated_report():
-    """A decision chooses "write" (the agent's report step) or "get" (an
-    existing record); both lead to a check, which can rework back to "get".
-    The way through "get" skips the report, so the generated one stays."""
+def test_an_explicit_stop_after_a_choice_and_rework_adds_no_generated_report():
+    """After either source the case explicitly stops or reworks; there is no
+    normal completion path on which to generate another report."""
     steps = [
         UPLOAD,
         EXTRACT,
@@ -1137,7 +1220,7 @@ def test_a_choice_that_skips_the_report_through_a_rework_loop_keeps_the_generate
     )
     _, kinds, _ = _flows(bp)
 
-    assert PDF in kinds
+    assert PDF not in kinds
 
 
 def test_a_decision_step_is_not_taken_for_the_report_writer():
