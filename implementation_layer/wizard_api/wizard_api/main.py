@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from wizard_api import config, errors, telemetry
+from wizard_api import audit, config, errors, telemetry
 from wizard_api.routers.blueprint_edit import router as blueprint_edit_router
 from wizard_api.routers.cases import router as cases_router
 from wizard_api.routers.owners import router as owners_router
@@ -57,6 +57,8 @@ app = FastAPI(
 # version (telemetry.RequestSpanMiddleware).
 app.add_middleware(telemetry.RequestSpanMiddleware)
 app.add_middleware(ServiceTokenMiddleware)
+# Outside the token check, so a refused token is audited with the request's owner.
+app.add_middleware(audit.AuditContextMiddleware)
 # Outside the token check: a refused token gets a trace id too.
 app.add_middleware(errors.TraceIdMiddleware)
 # Outermost of all: no request span leaves with a session's id in its path.

@@ -52,5 +52,4 @@ Always pass `--context` explicitly; never apply with whatever context happens to
 
 - The collector's OTLP Route for producers in other projects (M2; designed in `overlays/rahti/README.md`)
 - OpenBao on Kubernetes; the pseudonymisation key comes from a Secret here
-- A purge CronJob for `collection.purge_expired()`
 - MLflow runs two workers within a 2 GiB limit; size it against real use before the hackathon

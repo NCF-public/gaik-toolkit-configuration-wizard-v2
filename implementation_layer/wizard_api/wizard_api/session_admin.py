@@ -59,7 +59,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from wizard_api import config, owner_id
+from wizard_api import audit, config, owner_id, telemetry
 from wizard_api.db import SessionLocal
 from wizard_api.models import WizardSession
 from wizard_api.ownership import USER_HEADER
@@ -345,6 +345,29 @@ def main(argv: list[str] | None = None) -> None:
     commands.add_parser("owner-id").add_argument("email")
     commands.add_parser("move-owners").add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
+    telemetry.setup_audit()
+    fields = {"gaik.operator.apply": getattr(args, "apply", None)}
+    if args.command == "delete":
+        fields["gaik.audit.reason"] = args.reason
+    if args.command == "protect":
+        fields["gaik.audit.reason"] = "off" if args.off else "on"
+    target = getattr(args, "session_id", None)
+    try:
+        _run(parser, args)
+    except BaseException as exc:
+        # sys.exit(0) is a finished command; any other exit or error is not.
+        done = isinstance(exc, SystemExit) and exc.code in (None, 0)
+        audit.operator(
+            args.command, audit.SUCCESS if done else audit.ERROR, fields, session_id=target
+        )
+        raise
+    else:
+        audit.operator(args.command, audit.SUCCESS, fields, session_id=target)
+    finally:
+        telemetry.shutdown()
+
+
+def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.command == "owner-id":
         print(owner_id.owner_id(args.email, _key_or_exit()))
         return

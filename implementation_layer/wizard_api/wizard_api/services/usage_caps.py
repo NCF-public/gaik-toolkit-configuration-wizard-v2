@@ -157,6 +157,15 @@ def caps_left(db: Session, session: WizardSession, now: datetime | None = None) 
     caps = sorted(_caps(db, session, now), key=lambda c: c.scope != DEPLOYMENT)
     for cap in caps:
         if cap.left < MIN_TURN_BUDGET_USD:
+            from wizard_api import audit
+
+            audit.event(
+                "usage.cap_reached",
+                audit.DENIED,
+                {"gaik.audit.reason": cap.scope},
+                owner=session.user_id,
+                session_id=session.id,
+            )
             raise UsageCapError(cap.scope)
     return caps
 
@@ -379,11 +388,16 @@ def record_cost(
         return []
     ratio = config.cost_warn_ratio()
     notices: list[str] = []
+    # Read before the commit, which expires the row: a session deleted meanwhile
+    # would fail the read after it.
+    session_id = session.id if session is not None else None
+    session_total: float | None = None
 
     if session is not None:
         session_service.lock_fresh(db, session)
         metadata = dict(session.session_metadata or {})
         total = session_spent(session) + cost
+        session_total = total
         metadata[SESSION_COST_KEY] = round(total, 6)
         cap = config.session_max_cost_usd()
         if (
@@ -413,6 +427,23 @@ def record_cost(
         ops_metrics.usage_warnings.add(1, {"scope": DEPLOYMENT})
     db.commit()
     ops_metrics.usage_cost.add(cost)
+    from wizard_api import audit
+
+    # Who spent what, where. Kept apart from the caps' totals, which an operator can
+    # delete to start a user again (README): this record of the spend stays.
+    audit.event(
+        "usage.cost",
+        audit.SUCCESS,
+        {
+            "gaik.cost.usd": cost,
+            "gaik.cost.session_total_usd": session_total,
+            "gaik.cost.user_total_usd": user_total,
+            "gaik.cost.deployment_total_usd": deployment_total,
+            "gaik.cost.period": period,
+        },
+        owner=user_id,
+        session_id=session_id,
+    )
     for scope in notices:
         ops_metrics.usage_warnings.add(1, {"scope": scope})
     return notices

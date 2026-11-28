@@ -100,6 +100,19 @@ def setup() -> None:
         _setup_logs(resource)
 
 
+def setup_audit() -> None:
+    """Only the log export that audit events go out through, for an operator command.
+
+    A command run in the pod (``session_admin``) is a process of its own: it
+    sends its audit events, and its warnings, to the API's collector and no
+    spans or metrics. ``shutdown()`` sends what is queued. Idempotent.
+    """
+    if os.getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        from opentelemetry.sdk.resources import Resource
+
+        _setup_logs(Resource.create(resource_attributes()))
+
+
 _SESSION_PATH = re.compile(
     r"/sessions/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
 )
@@ -448,6 +461,13 @@ def _setup_logs(resource: Any) -> None:
     _log_provider = provider
 
 
+def audit_logger() -> Any:
+    """The logger audit events go out through (``wizard_api.audit``); None without logs export."""
+    if _log_provider is None:
+        return None
+    return _log_provider.get_logger("wizard_api.audit")
+
+
 def shutdown() -> None:
     """Flush the spans and metrics still queued; called when the app stops."""
     from wizard_api import ops_metrics
@@ -617,6 +637,22 @@ def record_gates_reopened(
         name_blueprint_version(version, span)
 
 
+def _audit_sandbox(kind: str, outcome: str, kwargs: dict, *, reason: str | None = None) -> None:
+    """A ``sandbox.start`` audit event: a run uses the deployment's model key, so it costs.
+
+    No run id: the session's metadata names its runs, so a run id in clear would
+    lead from the audit record to the session the collector pseudonymises.
+    """
+    from wizard_api import audit
+
+    audit.event(
+        "sandbox.start",
+        outcome,
+        {"gaik.sandbox.kind": kind, "gaik.audit.reason": reason},
+        session_id=kwargs.get("session_id"),
+    )
+
+
 def sandbox_start_span(kind: str):
     """Wrap a run-starting endpoint in a ``wizard.sandbox.start`` span.
 
@@ -638,12 +674,16 @@ def sandbox_start_span(kind: str):
                     started = endpoint(*args, **kwargs)
                 except HTTPException as exc:
                     record_refusal(span, "gaik.sandbox.refused", exc)
+                    _audit_sandbox(kind, "denied", kwargs, reason=refusal(exc))
                     raise
                 except Exception as exc:
                     record_failure(span, exc)
+                    _audit_sandbox(kind, "error", kwargs)
                     raise
-                if isinstance(started, dict) and started.get("run_id"):
-                    span.set_attribute("gaik.sandbox.run_id", started["run_id"])
+                run_id = started.get("run_id") if isinstance(started, dict) else None
+                if run_id:
+                    span.set_attribute("gaik.sandbox.run_id", run_id)
+                _audit_sandbox(kind, "success", kwargs)
                 return started
 
         return traced

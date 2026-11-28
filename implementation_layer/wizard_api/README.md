@@ -550,6 +550,38 @@ printed twice. The collector's handler keeps its own level: an `INFO` line
 reaches the collector only with `WIZARD_OTEL_LOG_LEVEL=INFO`, which now works for
 the API's lines even where the pod prints warnings only.
 
+### Audit events
+
+`wizard_api/audit.py` sends an audit record (`gaik.event.class=audit`) through the same
+log export, for every session whether or not its user allowed storing usage data: who
+did what to which session, and what it cost. The collection sink keeps them apart from
+the logs, for the audit retention period, and they cannot be changed
+(`gaik-aiops/shared/collection`). Each carries `event.name`, `gaik.audit.outcome`
+(`success`, `denied`, `error`), the owner id as `enduser.id` and the session as
+`gaik.session.id` (the collector pseudonymises both), `gaik.request.id` (the request's
+`x-trace-id`, which the web app's own log lines carry too, for following one request
+across both) and only the fields listed in `audit.FIELDS`: fixed codes, ids and numbers.
+An owner that is no owner id (`o_…`), a field outside the list, or a value with `@` or
+over 64 characters is left out.
+
+| Event | When | Fields |
+|---|---|---|
+| `session.create` | created, or refused at the session limit | `gaik.audit.reason` `session_limit` when denied |
+| `session.delete` | removed, or the removal failed | `gaik.audit.reason`: `owner`, `data-subject-request`, `owner-left`, `retention`, `other` |
+| `gate.change` | a gate set from the panel (also refused), or reopened | `gaik.gate`, `.from`, `.to`, `.by` (`user`, `agent`, `change`), reason when refused |
+| `authz.denied` | a session asked for by someone else | the requester as `enduser.id`; reason `not_owner` |
+| `auth.token_rejected` | a request without the service token | reason `missing_token` or `bad_token`, `gaik.http.method` |
+| `upload.refused` | an upload refused by its content or scan | reason `input_unsafe` or `scanner_unavailable` |
+| `usage.cost` | each turn's cost added to the caps | `gaik.cost.usd`, the session's, user's and month's totals, `gaik.cost.period` |
+| `usage.cap_reached` | a message refused at a cap | reason: `session`, `user` or `deployment` |
+| `usage.budget_stop` | the agent stopped at its budget | `gaik.usage.limit`: `agent` or `usage_cap` |
+| `sandbox.start` | a run, check or case started or refused | `gaik.sandbox.kind`, reason when refused (no run id: it would lead to the session) |
+| `operator.session_admin` | each `session_admin` command | `gaik.operator.command`, `gaik.operator.apply`, reason (delete reason, protect on/off) |
+
+The pod's log gets one `INFO` line per event (`audit <name> <outcome>`). Without an OTLP
+endpoint nothing is sent. `session_admin` sends its own event from the pod with the
+container's OTLP settings; who ran the command is not known to the pod.
+
 No metric or log label carries an e-mail address or what anyone wrote. Checks that read
 the database or walk the sessions volume run at most every `WIZARD_OPS_CHECK_SECONDS`
 (600 unless set). The alert rules and dashboards that read these live in the WP5 stack's

@@ -56,6 +56,19 @@ class ServiceTokenMiddleware(BaseHTTPMiddleware):
                 request.method,
                 "missing_token" if not presented else "bad_token",
             )
+            from wizard_api import audit
+
+            audit.event(
+                "auth.token_rejected",
+                audit.DENIED,
+                {
+                    "gaik.audit.reason": "missing_token" if not presented else "bad_token",
+                    "gaik.http.method": request.method,
+                },
+                # Not the request's own: a caller without the token names anyone it likes.
+                owner="",
+                session_id="",
+            )
             return JSONResponse({"detail": "Missing or invalid service token."}, status_code=401)
 
         return await call_next(request)
