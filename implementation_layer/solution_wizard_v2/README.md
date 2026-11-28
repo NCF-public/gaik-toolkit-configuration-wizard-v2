@@ -15,7 +15,9 @@ Tämä on prototyyppi näytille, ei vielä toiminnallinen wizard (chat, BPMN ja 
 
 ## Käyttöönotto
 
-1. Asenna riippuvuudet:
+1. Install the dependencies with Node.js 22.12 or newer (22.x, 24.x or 26+, as
+   `engines` in `package.json` says; Vitest 5, which runs the unit tests, does not run
+   on older versions):
    ```
    npm install
    ```
